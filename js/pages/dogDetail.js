@@ -281,7 +281,7 @@ function openEditModal() {
         <button type="button" class="btn btn-primary" data-action="save">儲存</button>
       </div>
     `,
-    onMount: (modalEl) => {
+    onMount: (modalEl, close) => {
       attachAutocomplete(modalEl.querySelector("#e-series"), []);
       modalEl.querySelector('[data-action="cancel"]').addEventListener("click", close);
       modalEl.querySelector('[data-action="save"]').addEventListener("click", async () => {
@@ -327,7 +327,7 @@ function openMoveModal() {
         <button type="button" class="btn btn-primary" data-action="save">移動</button>
       </div>
     `,
-    onMount: (modalEl) => {
+    onMount: (modalEl, close) => {
       modalEl.querySelector('[data-action="cancel"]').addEventListener("click", close);
       modalEl.querySelector('[data-action="save"]').addEventListener("click", async () => {
         const toAccountId = modalEl.querySelector("#m-account").value;
@@ -366,7 +366,7 @@ function openAddBreedingModal() {
         <button type="button" class="btn btn-primary" data-action="save" style="display:none;">建立配狗計畫</button>
       </div>
     `,
-    onMount: (modalEl) => {
+    onMount: (modalEl, close) => {
       let selectedPartnerId = null;
 
       modalEl.querySelector('[data-action="cancel"]').addEventListener("click", close);

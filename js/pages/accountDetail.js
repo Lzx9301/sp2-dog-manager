@@ -35,8 +35,9 @@ async function loadAccount() {
 
 function renderBasicSection() {
   document.getElementById("section-basic").innerHTML = `
-    <div><strong>帳號名稱：</strong>${account.accountName || "（無）"}</div>
-    <div><strong>密碼：</strong>${account.password || "（無）"}</div>
+    <div><strong>顯示名稱：</strong>${account.accountName || "（無）"}</div>
+    <div><strong>登入帳號：</strong>${account.loginAccount || "（無）"}</div>
+    <div><strong>登入密碼：</strong>${account.password || "（無）"}</div>
     <div><strong>門號：</strong>${account.phone || "（無）"}</div>
     <div><strong>錢：</strong>${account.money ?? "（無）"}</div>
     <div><strong>骨：</strong>${account.bones ?? "（無）"}</div>
@@ -101,8 +102,9 @@ function openEditModal() {
   const { close, el } = openModal({
     title: "編輯帳號資料",
     contentHtml: `
-      <div class="form-group"><label>帳號名稱</label><input type="text" id="e-name" value="${account.accountName || ""}" /></div>
-      <div class="form-group"><label>帳號密碼</label><input type="text" id="e-password" value="${account.password || ""}" /></div>
+      <div class="form-group"><label>顯示名稱</label><input type="text" id="e-name" value="${account.accountName || ""}" /></div>
+      <div class="form-group"><label>登入帳號</label><input type="text" id="e-login-account" value="${account.loginAccount || ""}" /></div>
+      <div class="form-group"><label>登入密碼</label><input type="text" id="e-password" value="${account.password || ""}" /></div>
       <div class="form-group"><label>門號</label><input type="text" id="e-phone" value="${account.phone || ""}" /></div>
       <div class="form-row">
         <div class="form-group"><label>錢</label><input type="number" id="e-money" value="${account.money ?? ""}" /></div>
@@ -115,17 +117,18 @@ function openEditModal() {
         <button type="button" class="btn btn-primary" data-action="save">儲存</button>
       </div>
     `,
-    onMount: (modalEl) => {
+    onMount: (modalEl, close) => {
       modalEl.querySelector('[data-action="cancel"]').addEventListener("click", close);
       modalEl.querySelector('[data-action="save"]').addEventListener("click", async () => {
         const password = modalEl.querySelector("#e-password").value.trim();
         if (!password) {
-          modalEl.querySelector("#e-error").textContent = "帳號密碼為必填欄位";
+          modalEl.querySelector("#e-error").textContent = "登入密碼為必填欄位";
           return;
         }
         try {
           await updateAccount(accountId, {
             accountName: modalEl.querySelector("#e-name").value.trim(),
+            loginAccount: modalEl.querySelector("#e-login-account").value.trim(),
             password,
             phone: modalEl.querySelector("#e-phone").value.trim(),
             money: modalEl.querySelector("#e-money").value ? Number(modalEl.querySelector("#e-money").value) : null,

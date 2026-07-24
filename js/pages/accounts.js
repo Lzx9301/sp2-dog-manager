@@ -33,7 +33,9 @@ function renderAccountList() {
   const filtered = accounts.filter((a) => {
     if (!showInactive && a.isActive === false) return false;
     if (!keyword) return true;
-    return [a.accountName, a.phone, a.notes].filter(Boolean).some((f) => String(f).toLowerCase().includes(keyword));
+    return [a.accountName, a.loginAccount, a.phone, a.notes]
+      .filter(Boolean)
+      .some((f) => String(f).toLowerCase().includes(keyword));
   });
 
   const listEl = document.getElementById("account-list");
@@ -52,6 +54,7 @@ function renderAccountList() {
         account.isActive === false ? '<span class="tag" style="background:#eee;">已停用</span>' : ""
       }</div>
       <div class="dog-meta">
+        登入帳號：${account.loginAccount || "（無）"}<br/>
         門號：${account.phone || "（無）"}<br/>
         狗狗數量：${dogCountByAccount.get(account.id) || 0}
       </div>
@@ -67,8 +70,9 @@ function openAddAccountModal() {
   const { close, el } = openModal({
     title: "新增帳號",
     contentHtml: `
-      <div class="form-group"><label>帳號名稱</label><input type="text" id="a-name" /></div>
-      <div class="form-group"><label>帳號密碼（必填）</label><input type="text" id="a-password" /></div>
+      <div class="form-group"><label>顯示名稱</label><input type="text" id="a-name" /></div>
+      <div class="form-group"><label>登入帳號（選填）</label><input type="text" id="a-login-account" /></div>
+      <div class="form-group"><label>登入密碼（必填）</label><input type="text" id="a-password" /></div>
       <div class="form-row">
         <div class="form-group"><label>門號（選填）</label><input type="text" id="a-phone" /></div>
       </div>
@@ -83,18 +87,19 @@ function openAddAccountModal() {
         <button type="button" class="btn btn-primary" data-action="save">儲存</button>
       </div>
     `,
-    onMount: (modalEl) => {
+    onMount: (modalEl, close) => {
       modalEl.querySelector('[data-action="cancel"]').addEventListener("click", close);
       modalEl.querySelector('[data-action="save"]').addEventListener("click", async () => {
         const errorEl = modalEl.querySelector("#a-error");
         const password = modalEl.querySelector("#a-password").value.trim();
         if (!password) {
-          errorEl.textContent = "帳號密碼為必填欄位";
+          errorEl.textContent = "登入密碼為必填欄位";
           return;
         }
         try {
           await createAccount({
             accountName: modalEl.querySelector("#a-name").value.trim(),
+            loginAccount: modalEl.querySelector("#a-login-account").value.trim(),
             password,
             phone: modalEl.querySelector("#a-phone").value.trim(),
             money: modalEl.querySelector("#a-money").value ? Number(modalEl.querySelector("#a-money").value) : null,

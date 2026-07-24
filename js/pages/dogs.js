@@ -250,7 +250,7 @@ function openAddDogModal() {
         <button type="button" class="btn btn-primary" data-action="save">儲存</button>
       </div>
     `,
-    onMount: (modalEl) => {
+    onMount: (modalEl, close) => {
       // 系列 autocomplete
       attachAutocomplete(modalEl.querySelector("#f-series"), seriesList);
 

@@ -186,7 +186,7 @@ function openAddOffspringModal(plan, dogA, dogB) {
         <button type="button" class="btn btn-primary" data-action="save">建立子代</button>
       </div>
     `,
-    onMount: (modalEl) => {
+    onMount: (modalEl, close) => {
       attachAutocomplete(modalEl.querySelector("#o-series"), seriesList);
       const tagController = attachTagInput(
         modalEl.querySelector("#o-tag-chips"),
