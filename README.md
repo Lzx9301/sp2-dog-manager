@@ -108,7 +108,7 @@ service cloud.firestore {
 | createdAt / updatedAt | string (ISO) | |
 
 ### `accounts`
-accountName, password（必填）, phone, money, bones, notes, isActive, createdAt, updatedAt
+accountName（顯示名稱）, loginAccount（登入帳號，選填，舊資料可能沒有這個欄位）, password（登入密碼，必填）, phone, money, bones, notes, isActive, createdAt, updatedAt
 
 ### `breeds`
 name, sortOrder, isActive, createdAt, updatedAt
