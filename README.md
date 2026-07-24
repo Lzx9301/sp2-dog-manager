@@ -1,1 +1,0 @@
-# sp2-dog-manager
