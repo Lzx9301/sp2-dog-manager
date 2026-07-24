@@ -177,8 +177,27 @@ dogId, fromAccountId, toAccountId, movedAt, notes
   - `confirmed_related_unknown_distance`：族譜查無關聯，但有人工確認血緣紀錄
 - 演算法核心 `checkPedigreeCompatibilityCore()` 刻意設計成**不依賴 Firebase**（透過注入 resolver function），對外的 `checkPedigreeCompatibility()` 才是連線 Firestore 的正式版本。這樣可以直接用 `node tests/pedigreeService.test.js` 在本機驗證邏輯，不需要连线測試環境。
 - `scanRebreedCandidates(targetDogId, candidateDogIds)`：可回配候選掃描，UI 骨架見 `pedigree-check.html`。
+- `wouldCreateCycle(dogId, candidateParentId)` / `wouldCreateCycleCore(...)`：設定父母時的循環防呆檢查。原理是把「設 candidateParentId 為 dogId 的父/母」視為新增一條邊，只要 candidateParentId 現有的祖先鏈中已經包含 dogId（也就是 dogId 已經是 candidateParentId 的祖先），就代表這條邊會形成循環，直接擋下不儲存。這個檢查沿用同一套祖先搜尋邏輯，同樣拆成不依賴 Firebase 的 Core 版本方便測試。
 
-**測試驗證**：`tests/pedigreeService.test.js` 目前涵蓋 5 種案例（親兄弟姊妹、父女、完全無關聯、共同曾祖父母超過三代、父母皆未知），全部通過。之後你提供實際族譜案例時，可以直接依照現有格式加入新的測試案例來驗證三代邊界是否符合遊戲實際規則。
+**測試驗證**：`tests/pedigreeService.test.js` 目前涵蓋：
+- 血緣距離判斷 5 種案例（親兄弟姊妹、父女、完全無關聯、共同曾祖父母超過三代、父母皆未知）
+- 循環防呆 6 種案例（自己設自己、直接循環、間接循環、更深層循環、無關狗允許設定、正常設定允許）
+
+全部通過。之後你提供實際族譜案例時，可以直接依照現有格式加入新的測試案例來驗證三代邊界是否符合遊戲實際規則。
+
+## 5.1 父母選擇器（`js/components/parentPicker.js`）
+
+新增／編輯狗狗表單的「父親」「母親」欄位共用這個元件：
+
+- `buildParentOptionsHtml()`：組合「我的狗狗」＋「外部血統節點」成下拉選單 HTML。父親欄位會把公狗排在前面、母親欄位把母狗排在前面，但**不強制限制**——所有狗都可以被選，因為狗的性別之後可能會被修改。
+- `attachGenderMismatchWarning()`：選到性別不符的對象時，在欄位下方顯示提醒文字，但不會阻止選擇或儲存。
+- `attachAddExternalNodeButton()`：欄位旁邊的「＋ 新增外部血統節點」按鈕，用 `prompt()` 快速建立一個外部血統節點（不屬於任何帳號、只用於血統追蹤），建立後立即出現在下拉選單並自動選取。
+
+**外部父母的資料設計**：父親／母親欄位使用同一個 `fatherId` / `motherId` 欄位，值可能是「我的狗」的 document id，也可能是 `externalPedigreeNodes` 的 document id——由 `pedigreeService` 在查詢時同時檢查兩個 collection 來判斷是哪一種。這是原本架構就已經支援的設計（`getNodeByIdFromFirebase` 本來就會依序查 `dogs` 再查 `externalPedigreeNodes`），所以這次沒有另外新增 `fatherExternalId` / `motherExternalId` 欄位——那樣會造成兩套 ID 系統要同步維護，增加不必要的複雜度。單一 `fatherId` / `motherId` 欄位配合「查兩個 collection」的解析邏輯，已經能達到「父母可以是我的狗、也可以是外部節點、也可以清空」的完整需求。
+
+**循環防呆**：編輯狗狗儲存時，會先呼叫 `wouldCreateCycle()` 檢查新選的父親／母親是否會形成循環（包含直接循環、多代循環），偵測到就阻擋儲存並顯示錯誤訊息，不會刪除或覆蓋任何既有資料。
+
+
 
 ---
 
