@@ -13,6 +13,7 @@
 
 import {
   checkPedigreeCompatibilityCore,
+  wouldCreateCycleCore,
   PEDIGREE_RESTRICTED_GENERATIONS
 } from "../js/utils/pedigreeService.js";
 
@@ -167,4 +168,82 @@ async function runTests() {
   console.log(`\n共 ${testCases.length} 筆測試，通過 ${passed}，失敗 ${failed}`);
 }
 
-runTests();
+await runTests();
+
+// --------------------------------------------------
+// wouldCreateCycleCore 測試（父母設定循環防呆）
+// --------------------------------------------------
+// 使用族譜：A -> B（A 是 B 的父親）-> C（B 是 C 的父親）-> D（C 是 D 的父親）
+const cycleFixtureNodes = {
+  A: { id: "A", fatherId: null, motherId: null },
+  B: { id: "B", fatherId: "A", motherId: null },
+  C: { id: "C", fatherId: "B", motherId: null },
+  D: { id: "D", fatherId: "C", motherId: null },
+  X: { id: "X", fatherId: null, motherId: null } // 完全無關的狗
+};
+
+async function resolveCycleFixtureNode(id) {
+  return cycleFixtureNodes[id] ? { ...cycleFixtureNodes[id] } : null;
+}
+
+const cycleTestCases = [
+  {
+    name: "把自己設成自己的父母 -> 應偵測為循環",
+    dogId: "A",
+    candidateParentId: "A",
+    expected: true
+  },
+  {
+    name: "把子代 B 設成祖先 A 的父親 -> 應偵測為循環（直接循環）",
+    dogId: "A",
+    candidateParentId: "B",
+    expected: true
+  },
+  {
+    name: "把孫代 C 設成祖先 A 的父親 -> 應偵測為循環（間接循環）",
+    dogId: "A",
+    candidateParentId: "C",
+    expected: true
+  },
+  {
+    name: "把曾孫代 D 設成祖先 A 的父親 -> 應偵測為循環（更深層循環）",
+    dogId: "A",
+    candidateParentId: "D",
+    expected: true
+  },
+  {
+    name: "把完全無關的狗 X 設成 D 的父親 -> 不是循環，應允許",
+    dogId: "D",
+    candidateParentId: "X",
+    expected: false
+  },
+  {
+    name: "正常設定：把 A 設成 B 的父親（B 原本就沒有父親）-> 不是循環",
+    dogId: "B",
+    candidateParentId: "A",
+    expected: false
+  }
+];
+
+async function runCycleTests() {
+  console.log("\n--- wouldCreateCycleCore 測試 ---");
+  let passed = 0;
+  let failed = 0;
+
+  for (const testCase of cycleTestCases) {
+    const result = await wouldCreateCycleCore(testCase.dogId, testCase.candidateParentId, resolveCycleFixtureNode);
+
+    if (result === testCase.expected) {
+      console.log(`✅ ${testCase.name}`);
+      passed++;
+    } else {
+      console.log(`❌ ${testCase.name}`);
+      console.log(`   期望: ${testCase.expected}，實際: ${result}`);
+      failed++;
+    }
+  }
+
+  console.log(`\n共 ${cycleTestCases.length} 筆測試，通過 ${passed}，失敗 ${failed}`);
+}
+
+await runCycleTests();
