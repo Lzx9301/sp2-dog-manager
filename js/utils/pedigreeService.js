@@ -288,3 +288,41 @@ export async function scanRebreedCandidates(targetDogId, candidateDogIds) {
   }
   return results;
 }
+
+/**
+ * 循環檢查核心演算法（不依賴 Firebase，方便單元測試）
+ * 詳細原理說明見下方 wouldCreateCycle。
+ *
+ * @param {string} dogId
+ * @param {string} candidateParentId
+ * @param {(id: string) => Promise<{id, fatherId, motherId}|null>} resolveNode
+ * @param {number} maxDepth
+ * @returns {Promise<boolean>}
+ */
+export async function wouldCreateCycleCore(dogId, candidateParentId, resolveNode, maxDepth = 20) {
+  if (!dogId || !candidateParentId) return false;
+  if (dogId === candidateParentId) return true; // 不能把自己設成自己的父母
+
+  const { ancestorMap } = await buildAncestorMap(candidateParentId, maxDepth, resolveNode);
+  return ancestorMap.has(dogId);
+}
+
+/**
+ * 檢查「把 candidateParentId 設為 dogId 的父親／母親」是否會形成血緣循環（正式對外使用版本，直接連線 Firestore）。
+ *
+ * 原理：這個操作等於新增一條邊 candidateParentId → dogId（candidateParentId 是 dogId 的父/母）。
+ * 如果 candidateParentId 本身已經是 dogId 的後代（也就是說，dogId 已經是 candidateParentId
+ * 往上追溯的祖先之一），那麼加上這條邊就會形成循環（例如 A 的子代 B，若把 B 設為 A 的父親，
+ * 等於 A 的祖先鏈裡有 B，而 B 的祖先鏈裡又有 A，兩者互為祖先，矛盾）。
+ *
+ * 這個檢查會沿著 candidateParentId 現有的父母鏈往上找最多 maxDepth 代，
+ * 只要找到 dogId 就代表會形成循環。
+ *
+ * @param {string} dogId - 要被設定父母的狗（若是新增中、尚未存在的狗，可以傳 null，一定回傳 false）
+ * @param {string} candidateParentId - 打算設為父親或母親的對象 id（狗或外部血統節點）
+ * @param {number} maxDepth - 最多往上追溯幾代，預設 20（私人系統資料量不大，足夠涵蓋絕大多數情境）
+ * @returns {Promise<boolean>} true 代表會形成循環，不應該允許這個設定
+ */
+export async function wouldCreateCycle(dogId, candidateParentId, maxDepth = 20) {
+  return wouldCreateCycleCore(dogId, candidateParentId, getNodeByIdFromFirebase, maxDepth);
+}
