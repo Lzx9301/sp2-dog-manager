@@ -6,7 +6,18 @@
 
 /**
  * 開啟一個 Modal
- * @param {{title: string, contentHtml: string, onMount?: (modalEl: HTMLElement) => void}} options
+ *
+ * 重要：onMount 會在 openModal() 這個函式呼叫「還沒 return」之前就同步執行。
+ * 如果呼叫端寫成：
+ *   const { close } = openModal({ onMount: (modalEl) => { ...button.addEventListener('click', close) } })
+ * 這裡的 close 會被解析成呼叫端自己那個「還在宣告中、尚未初始化」的 const close，
+ * 而不是 modal.js 內部的 close function（兩者在不同模組作用域，本來就不是同一個），
+ * 因此會丟出 "Cannot access 'close' before initialization"（暫時性死區錯誤）。
+ *
+ * 為了讓呼叫端不需要依賴外層尚未初始化的變數，onMount 會直接把 close 當作
+ * 第二個參數傳入，呼叫端請一律使用這個參數，不要依賴外層解構出來的 close。
+ *
+ * @param {{title: string, contentHtml: string, onMount?: (modalEl: HTMLElement, close: () => void) => void}} options
  * @returns {{ close: () => void, el: HTMLElement }}
  */
 export function openModal({ title, contentHtml, onMount }) {
@@ -36,7 +47,8 @@ export function openModal({ title, contentHtml, onMount }) {
     if (e.target === overlay) close();
   });
 
-  if (onMount) onMount(modal);
+  // 把 close 當作第二個參數傳入，呼叫端請使用這個參數，不要依賴外層解構的 close
+  if (onMount) onMount(modal, close);
 
   return { close, el: modal };
 }
@@ -44,7 +56,7 @@ export function openModal({ title, contentHtml, onMount }) {
 /** 簡易確認對話框，回傳 Promise<boolean> */
 export function confirmModal(message) {
   return new Promise((resolve) => {
-    const { close } = openModal({
+    openModal({
       title: "請確認",
       contentHtml: `
         <p>${message}</p>
@@ -53,7 +65,7 @@ export function confirmModal(message) {
           <button type="button" class="btn btn-danger" data-action="confirm">確定</button>
         </div>
       `,
-      onMount: (modalEl) => {
+      onMount: (modalEl, close) => {
         modalEl.querySelector('[data-action="cancel"]').addEventListener("click", () => {
           close();
           resolve(false);
