@@ -2,7 +2,15 @@
 // 帳號 Service (accounts collection)
 // ==================================================
 // 帳號是「資源容器」，與狗狗資料完全分開。
-// 只有 password 是必填欄位。
+// 只有 password（登入密碼）是必填欄位。
+//
+// 欄位說明：
+//   accountName  - 顯示名稱（給你自己在系統裡辨識用，UI 上標示為「顯示名稱」）
+//   loginAccount - 登入帳號（遊戲/平台實際登入用的帳號，選填，舊資料可能沒有這個欄位）
+//   password     - 登入密碼（必填）
+//
+// 注意：狗狗綁定帳號一律使用 Firestore document id（accountId），
+// 不受這裡欄位改名或調整影響。
 
 import { db } from "../firebase-config.js";
 import {
@@ -39,12 +47,13 @@ export async function getActiveAccounts() {
 
 export async function createAccount(accountData) {
   if (!accountData.password) {
-    throw new Error("帳號密碼為必填欄位");
+    throw new Error("登入密碼為必填欄位");
   }
 
   const now = new Date().toISOString();
   const docRef = await addDoc(collection(db, COLLECTION_NAME), {
     accountName: accountData.accountName || "",
+    loginAccount: accountData.loginAccount || "",
     password: accountData.password,
     phone: accountData.phone || "",
     money: accountData.money ?? null,
