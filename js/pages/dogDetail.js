@@ -5,10 +5,12 @@ import { requireLogin } from "../services/authService.js";
 import { renderNav } from "../components/nav.js";
 import { openModal, confirmModal } from "../components/modal.js";
 import { attachAutocomplete, attachTagInput } from "../components/autocomplete.js";
+import { buildParentOptionsHtml, attachAddExternalNodeButton, attachGenderMismatchWarning } from "../components/parentPicker.js";
 import {
   getDogById,
   updateDog,
   getChildrenOf,
+  getAllDogs,
   searchDogs,
   getDistinctSeriesList,
   getDistinctMemorialTags
@@ -17,7 +19,7 @@ import { getAccountById, getActiveAccounts } from "../services/accountService.js
 import { getActiveBreeds, getBreedById } from "../services/breedService.js";
 import { getAllEffects, getEffectById, MAX_EFFECTS_PER_DOG } from "../services/effectService.js";
 import { getAllPatterns, getPatternById } from "../services/patternService.js";
-import { getExternalNodeById } from "../services/externalPedigreeService.js";
+import { getExternalNodeById, getAllExternalNodes } from "../services/externalPedigreeService.js";
 import {
   getPartnerIdsOf,
   getBreedingPlansOfDog,
@@ -26,7 +28,7 @@ import {
   BREEDING_PLAN_STATUS_LABELS
 } from "../services/breedingPlanService.js";
 import { moveDogToAccount, getMovementLogsOfDog } from "../services/movementLogService.js";
-import { checkPedigreeCompatibility } from "../utils/pedigreeService.js";
+import { checkPedigreeCompatibility, wouldCreateCycle } from "../utils/pedigreeService.js";
 import { calculateOffspringPurityDegree } from "../utils/purityCalculator.js";
 import { GENDER_LABELS, DOG_TYPE_LABELS, SOURCE_TYPE_LABELS } from "../utils/constants.js";
 
@@ -41,13 +43,17 @@ let accounts = [];
 let breeds = [];
 let effects = [];
 let patterns = [];
+let allDogs = [];
+let externalNodes = [];
 
 async function loadReferenceData() {
-  [accounts, breeds, effects, patterns] = await Promise.all([
+  [accounts, breeds, effects, patterns, allDogs, externalNodes] = await Promise.all([
     getActiveAccounts(),
     getActiveBreeds(),
     getAllEffects(),
-    getAllPatterns()
+    getAllPatterns(),
+    getAllDogs(),
+    getAllExternalNodes()
   ]);
 }
 
@@ -273,6 +279,34 @@ function openEditModal() {
           <input type="number" id="e-level" value="${dog.level ?? 1}" />
         </div>
       </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>父親（選填）</label>
+          <select id="e-father">${buildParentOptionsHtml({
+            dogs: allDogs,
+            externalNodes,
+            preferredGender: "male",
+            excludeDogId: dogId,
+            selectedId: dog.fatherId || null
+          })}</select>
+          <button type="button" class="btn btn-secondary btn-small" id="e-add-external-father" style="margin-top:4px;">＋ 新增外部血統節點</button>
+          <div id="e-father-warning" style="color:var(--color-warning); font-size:12px; margin-top:2px;"></div>
+        </div>
+        <div class="form-group">
+          <label>母親（選填）</label>
+          <select id="e-mother">${buildParentOptionsHtml({
+            dogs: allDogs,
+            externalNodes,
+            preferredGender: "female",
+            excludeDogId: dogId,
+            selectedId: dog.motherId || null
+          })}</select>
+          <button type="button" class="btn btn-secondary btn-small" id="e-add-external-mother" style="margin-top:4px;">＋ 新增外部血統節點</button>
+          <div id="e-mother-warning" style="color:var(--color-warning); font-size:12px; margin-top:2px;"></div>
+        </div>
+      </div>
+
       <div class="form-group"><label>純／混度</label><input type="number" id="e-purity" value="${dog.purityMixDegree ?? 0}" /></div>
       <div class="form-group"><label>備註</label><textarea id="e-notes">${dog.notes || ""}</textarea></div>
       <div id="e-error" style="color:#b3543f; font-size:13px;"></div>
@@ -283,8 +317,38 @@ function openEditModal() {
     `,
     onMount: (modalEl, close) => {
       attachAutocomplete(modalEl.querySelector("#e-series"), []);
+
+      const fatherSelect = modalEl.querySelector("#e-father");
+      const motherSelect = modalEl.querySelector("#e-mother");
+      attachAddExternalNodeButton(modalEl.querySelector("#e-add-external-father"), fatherSelect, externalNodes);
+      attachAddExternalNodeButton(modalEl.querySelector("#e-add-external-mother"), motherSelect, externalNodes);
+      attachGenderMismatchWarning(fatherSelect, modalEl.querySelector("#e-father-warning"), allDogs, "male");
+      attachGenderMismatchWarning(motherSelect, modalEl.querySelector("#e-mother-warning"), allDogs, "female");
+
       modalEl.querySelector('[data-action="cancel"]').addEventListener("click", close);
       modalEl.querySelector('[data-action="save"]').addEventListener("click", async () => {
+        const errorEl = modalEl.querySelector("#e-error");
+        errorEl.textContent = "";
+
+        const newFatherId = fatherSelect.value || null;
+        const newMotherId = motherSelect.value || null;
+
+        // 循環防呆：不能把自己的後代（或自己）設成自己的父母
+        if (newFatherId) {
+          const fatherCycle = await wouldCreateCycle(dogId, newFatherId);
+          if (fatherCycle) {
+            errorEl.textContent = "無法設定：這個選擇會形成血緣循環（例如把自己的子代或孫代設成父親），請重新選擇";
+            return;
+          }
+        }
+        if (newMotherId) {
+          const motherCycle = await wouldCreateCycle(dogId, newMotherId);
+          if (motherCycle) {
+            errorEl.textContent = "無法設定：這個選擇會形成血緣循環（例如把自己的子代或孫代設成母親），請重新選擇";
+            return;
+          }
+        }
+
         try {
           await updateDog(dogId, {
             name: modalEl.querySelector("#e-name").value.trim(),
@@ -292,12 +356,15 @@ function openEditModal() {
             gender: modalEl.querySelector("#e-gender").value,
             level: Number(modalEl.querySelector("#e-level").value) || 0,
             purityMixDegree: Number(modalEl.querySelector("#e-purity").value) || 0,
+            fatherId: newFatherId,
+            motherId: newMotherId,
             notes: modalEl.querySelector("#e-notes").value.trim()
           });
           close();
+          await loadReferenceData(); // 父母關係可能改變，重新整理狗狗清單快取
           await loadDog();
         } catch (err) {
-          modalEl.querySelector("#e-error").textContent = "儲存失敗，請稍後再試";
+          errorEl.textContent = "儲存失敗，請稍後再試";
           console.error(err);
         }
       });

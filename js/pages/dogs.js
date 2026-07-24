@@ -5,9 +5,11 @@ import { requireLogin } from "../services/authService.js";
 import { renderNav } from "../components/nav.js";
 import { openModal } from "../components/modal.js";
 import { attachAutocomplete, attachTagInput } from "../components/autocomplete.js";
+import { buildParentOptionsHtml, attachAddExternalNodeButton, attachGenderMismatchWarning } from "../components/parentPicker.js";
 import {
   searchDogs,
   createDog,
+  getAllDogs,
   getDistinctSeriesList,
   getDistinctMemorialTags
 } from "../services/dogService.js";
@@ -15,6 +17,7 @@ import { getActiveAccounts } from "../services/accountService.js";
 import { getActiveBreeds } from "../services/breedService.js";
 import { getAllEffects, MAX_EFFECTS_PER_DOG } from "../services/effectService.js";
 import { getAllPatterns } from "../services/patternService.js";
+import { getAllExternalNodes } from "../services/externalPedigreeService.js";
 import { GENDER_LABELS, DOG_TYPE_LABELS, SOURCE_TYPE_LABELS } from "../utils/constants.js";
 
 await requireLogin();
@@ -27,15 +30,19 @@ let effects = [];
 let patterns = [];
 let seriesList = [];
 let memorialTags = [];
+let allDogs = [];
+let externalNodes = [];
 
 async function loadReferenceData() {
-  [accounts, breeds, effects, patterns, seriesList, memorialTags] = await Promise.all([
+  [accounts, breeds, effects, patterns, seriesList, memorialTags, allDogs, externalNodes] = await Promise.all([
     getActiveAccounts(),
     getActiveBreeds(),
     getAllEffects(),
     getAllPatterns(),
     getDistinctSeriesList(),
-    getDistinctMemorialTags()
+    getDistinctMemorialTags(),
+    getAllDogs(),
+    getAllExternalNodes()
   ]);
 }
 
@@ -201,6 +208,33 @@ function openAddDogModal() {
 
       <div class="form-row">
         <div class="form-group">
+          <label>父親（選填）</label>
+          <select id="f-father">${buildParentOptionsHtml({
+            dogs: allDogs,
+            externalNodes,
+            preferredGender: "male",
+            excludeDogId: null,
+            selectedId: null
+          })}</select>
+          <button type="button" class="btn btn-secondary btn-small" id="f-add-external-father" style="margin-top:4px;">＋ 新增外部血統節點</button>
+          <div id="f-father-warning" style="color:var(--color-warning); font-size:12px; margin-top:2px;"></div>
+        </div>
+        <div class="form-group">
+          <label>母親（選填）</label>
+          <select id="f-mother">${buildParentOptionsHtml({
+            dogs: allDogs,
+            externalNodes,
+            preferredGender: "female",
+            excludeDogId: null,
+            selectedId: null
+          })}</select>
+          <button type="button" class="btn btn-secondary btn-small" id="f-add-external-mother" style="margin-top:4px;">＋ 新增外部血統節點</button>
+          <div id="f-mother-warning" style="color:var(--color-warning); font-size:12px; margin-top:2px;"></div>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
           <label>純／混度</label>
           <input type="number" id="f-purity" value="1" />
         </div>
@@ -275,6 +309,14 @@ function openAddDogModal() {
         }
       });
 
+      // 父母欄位：新增外部血統節點按鈕 + 性別不符警告
+      const fatherSelect = modalEl.querySelector("#f-father");
+      const motherSelect = modalEl.querySelector("#f-mother");
+      attachAddExternalNodeButton(modalEl.querySelector("#f-add-external-father"), fatherSelect, externalNodes);
+      attachAddExternalNodeButton(modalEl.querySelector("#f-add-external-mother"), motherSelect, externalNodes);
+      attachGenderMismatchWarning(fatherSelect, modalEl.querySelector("#f-father-warning"), allDogs, "male");
+      attachGenderMismatchWarning(motherSelect, modalEl.querySelector("#f-mother-warning"), allDogs, "female");
+
       modalEl.querySelector('[data-action="cancel"]').addEventListener("click", close);
 
       modalEl.querySelector('[data-action="save"]').addEventListener("click", async () => {
@@ -313,8 +355,8 @@ function openAddDogModal() {
           birthDate: modalEl.querySelector("#f-birthdate").value || null,
           memorialTags: tagInputController.getSelectedTags(),
           notes: modalEl.querySelector("#f-notes").value.trim(),
-          fatherId: null,
-          motherId: null
+          fatherId: modalEl.querySelector("#f-father").value || null,
+          motherId: modalEl.querySelector("#f-mother").value || null
         };
 
         try {
