@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>狗狗詳細資料｜狗狗資源管理</title>
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<nav class="top-nav" id="app-nav"></nav>
+
+<div class="page-container">
+  <div class="page-header">
+    <h1 id="dog-title">狗狗詳細資料</h1>
+    <div>
+      <button class="btn btn-secondary" id="edit-btn">編輯</button>
+      <button class="btn btn-secondary" id="move-btn">移動帳號</button>
+      <button class="btn btn-primary" id="add-breeding-btn">加入配狗計畫</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>基本資料</h2>
+    <div id="section-basic"></div>
+  </div>
+
+  <div class="card">
+    <h2>外觀</h2>
+    <div id="section-appearance"></div>
+  </div>
+
+  <div class="card">
+    <h2>來源</h2>
+    <div id="section-source"></div>
+  </div>
+
+  <div class="card">
+    <h2>血統</h2>
+    <div id="section-pedigree"></div>
+  </div>
+
+  <div class="card">
+    <h2>伴侶</h2>
+    <div id="section-partners"></div>
+  </div>
+
+  <div class="card">
+    <h2>子代（<span id="children-count">0</span>）</h2>
+    <div id="section-children-summary"></div>
+    <div id="section-children-full" style="display:none;"></div>
+  </div>
+
+  <div class="card">
+    <h2>配狗紀錄</h2>
+    <div id="section-breeding-records"></div>
+  </div>
+
+  <div class="card">
+    <h2>移動紀錄</h2>
+    <div id="section-movement-logs"></div>
+  </div>
+</div>
+
+<script type="module" src="js/pages/dogDetail.js"></script>
+</body>
+</html>

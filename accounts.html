@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>帳號管理｜狗狗資源管理</title>
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<nav class="top-nav" id="app-nav"></nav>
+
+<div class="page-container">
+  <div class="page-header">
+    <h1>帳號管理</h1>
+    <button class="btn btn-primary" id="add-account-btn">＋ 新增帳號</button>
+  </div>
+
+  <div class="search-bar">
+    <input type="text" id="search-input" placeholder="搜尋帳號名稱／門號／備註" />
+    <label style="display:flex; align-items:center; gap:6px; white-space:nowrap;">
+      <input type="checkbox" id="show-inactive" /> 顯示已停用
+    </label>
+  </div>
+
+  <div id="account-list" class="card-grid"></div>
+</div>
+
+<script type="module" src="js/pages/accounts.js"></script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>血緣檢查｜狗狗資源管理</title>
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<nav class="top-nav" id="app-nav"></nav>
+
+<div class="page-container">
+  <div class="page-header">
+    <h1>血緣檢查</h1>
+  </div>
+
+  <div class="card">
+    <h2>雙狗血緣檢查</h2>
+    <div class="form-row">
+      <div class="form-group">
+        <label>狗 A</label>
+        <input type="text" id="dog-a-search" placeholder="輸入名稱搜尋" />
+        <div id="dog-a-results"></div>
+      </div>
+      <div class="form-group">
+        <label>狗 B</label>
+        <input type="text" id="dog-b-search" placeholder="輸入名稱搜尋" />
+        <div id="dog-b-results"></div>
+      </div>
+    </div>
+    <button class="btn btn-primary" id="check-btn">檢查血緣</button>
+    <div id="check-result" style="margin-top:12px;"></div>
+  </div>
+
+  <div class="card">
+    <h2>可回配候選掃描</h2>
+    <div class="form-group">
+      <label>目標狗</label>
+      <input type="text" id="target-search" placeholder="輸入名稱搜尋" />
+      <div id="target-results"></div>
+    </div>
+    <button class="btn btn-primary" id="scan-btn">掃描我的狗狗資料庫</button>
+    <div id="scan-result" style="margin-top:12px;"></div>
+  </div>
+</div>
+
+<script type="module" src="js/pages/pedigreeCheck.js"></script>
+</body>
+</html>

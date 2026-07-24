@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>工作台｜狗狗資源管理</title>
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<!-- 登入畫面（未登入時顯示） -->
+<div id="login-screen" class="page-container" style="max-width:400px; margin-top:80px; display:none;">
+  <div class="card">
+    <h1 style="font-size:18px;">登入</h1>
+    <div class="form-group">
+      <label for="login-email">Email</label>
+      <input type="email" id="login-email" autocomplete="username" />
+    </div>
+    <div class="form-group">
+      <label for="login-password">密碼</label>
+      <input type="password" id="login-password" autocomplete="current-password" />
+    </div>
+    <div id="login-error" style="color:#b3543f; font-size:13px; margin-bottom:10px;"></div>
+    <button class="btn btn-primary" id="login-btn" style="width:100%;">登入</button>
+  </div>
+</div>
+
+<!-- 主畫面（登入後顯示） -->
+<div id="main-screen" style="display:none;">
+  <nav class="top-nav" id="app-nav"></nav>
+
+  <div class="page-container">
+    <div class="page-header">
+      <h1>工作台</h1>
+    </div>
+
+    <section class="dashboard-section">
+      <h2>待互動的配狗計畫</h2>
+      <div id="dashboard-interacting" class="card-grid"></div>
+    </section>
+
+    <section class="dashboard-section">
+      <h2>待練等的狗</h2>
+      <div id="dashboard-leveling" class="card-grid"></div>
+    </section>
+
+    <section class="dashboard-section">
+      <h2>準備完成，可以配</h2>
+      <div id="dashboard-ready" class="card-grid"></div>
+    </section>
+
+    <section class="dashboard-section">
+      <h2>最近完成的配狗</h2>
+      <div id="dashboard-completed" class="card-grid"></div>
+    </section>
+
+    <section class="dashboard-section">
+      <h2>已完成但尚未新增子代</h2>
+      <div id="dashboard-pending-offspring" class="card-grid"></div>
+    </section>
+  </div>
+</div>
+
+<script type="module" src="js/pages/dashboard.js"></script>
+</body>
+</html>

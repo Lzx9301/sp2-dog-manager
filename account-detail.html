@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>帳號詳細資料｜狗狗資源管理</title>
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<nav class="top-nav" id="app-nav"></nav>
+
+<div class="page-container">
+  <div class="page-header">
+    <h1 id="account-title">帳號詳細資料</h1>
+    <div>
+      <button class="btn btn-secondary" id="edit-btn">編輯</button>
+      <button class="btn btn-secondary" id="toggle-active-btn">停用</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>基本資料</h2>
+    <div id="section-basic"></div>
+  </div>
+
+  <div class="card">
+    <h2>這個帳號的狗狗（<span id="dog-count">0</span>）</h2>
+    <div class="search-bar"><input type="text" id="dog-search-input" placeholder="搜尋這個帳號的狗" /></div>
+    <div id="section-dogs" class="card-grid"></div>
+  </div>
+
+  <div class="card">
+    <h2>最近移入／移出紀錄</h2>
+    <div id="section-movement-logs"></div>
+  </div>
+</div>
+
+<script type="module" src="js/pages/accountDetail.js"></script>
+</body>
+</html>
