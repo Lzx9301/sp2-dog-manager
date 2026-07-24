@@ -8,21 +8,17 @@
 // 其他所有 service / utility 都只從這裡 import 已初始化好的 db / auth 物件。
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import {
-  getFirestore
-} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import {
-  getAuth
-} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getAuth } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
-// TODO: 換成你自己的 Firebase 專案設定
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyBPzbxoy2wWj6yIj8gZH0KIHF3eD0wP2DQ",
+  authDomain: "sp2-dog-manager.firebaseapp.com",
+  projectId: "sp2-dog-manager",
+  storageBucket: "sp2-dog-manager.firebasestorage.app",
+  messagingSenderId: "290852803002",
+  appId: "1:290852803002:web:4a40ab9df6378cb35a0d83",
+  measurementId: "G-VLRK6T3M83",
 };
 
 const app = initializeApp(firebaseConfig);
