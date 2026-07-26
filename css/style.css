@@ -229,6 +229,22 @@ textarea {
   font-size: 12px;
 }
 
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.invalid-plan-banner {
+  background: #f5dedb;
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
 /* ---------- 標籤 chip（紀念標籤輸入用） ---------- */
 
 .tag-chip {
