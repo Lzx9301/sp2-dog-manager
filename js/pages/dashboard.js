@@ -9,7 +9,7 @@ import {
   BREEDING_PLAN_STATUS_LABELS
 } from "../services/breedingPlanService.js";
 import { getDogById } from "../services/dogService.js";
-import { checkPedigreeCompatibility, isPedigreeStatusAllowed } from "../utils/pedigreeService.js";
+import { checkPedigreeCompatibility, getPedigreePermission, PEDIGREE_LEVEL } from "../utils/pedigreeService.js";
 import { predictOffspring } from "../utils/breedingPrediction.js";
 
 const loginScreen = document.getElementById("login-screen");
@@ -48,10 +48,11 @@ document.getElementById("login-btn").addEventListener("click", async () => {
 async function loadDashboard() {
   const plans = await getAllBreedingPlans();
 
-  // 「進行中」的計畫（尚未完成也尚未取消）在顯示於工作台前，
-  // 一律即時重新檢查血緣狀態，restricted / insufficient_data 等不允許配狗的
-  // 計畫直接從工作台隱藏（不出現在待互動/待練等/準備完成任何區塊），
-  // 只會出現在「配狗中心」並標示為無效計畫，讓你去處理（取消或刪除）。
+  // 「進行中」的計畫（尚未完成也尚未取消）在顯示於工作台前，一律即時重新檢查血緣狀態。
+  // 重要：只有 blocked（restricted，已確認三代內有血緣）才會從工作台隱藏。
+  // warning（insufficient_data 資料不足 / confirmed_related_unknown_distance 確認有親屬
+  // 但不知道距離）代表「目前不知道」，不等於「確認有血緣」，這種計畫仍然正常顯示在工作台，
+  // 只是會附上一個小提示，讓你知道之後完成/新增子代時需要人工確認。
   const activeStatusSet = new Set([
     BREEDING_PLAN_STATUS.PLANNED,
     BREEDING_PLAN_STATUS.INTERACTING,
@@ -61,10 +62,13 @@ async function loadDashboard() {
   ]);
   const activePlans = plans.filter((p) => activeStatusSet.has(p.status));
 
+  const pedigreePermissionByPlanId = new Map();
   const validActivePlans = [];
   for (const plan of activePlans) {
     const pedigreeResult = await checkPedigreeCompatibility(plan.dogAId, plan.dogBId);
-    if (isPedigreeStatusAllowed(pedigreeResult.status)) {
+    const permission = getPedigreePermission(pedigreeResult.status);
+    pedigreePermissionByPlanId.set(plan.id, permission);
+    if (permission.level !== PEDIGREE_LEVEL.BLOCKED) {
       validActivePlans.push(plan);
     }
   }
@@ -82,14 +86,20 @@ async function loadDashboard() {
     (p) => p.status === BREEDING_PLAN_STATUS.COMPLETED && !p.offspringCreated
   );
 
-  await renderPlanCards("dashboard-interacting", interactingPlans, renderInteractingCard);
-  await renderPlanCards("dashboard-leveling", levelingPlans, renderLevelingCard);
-  await renderPlanCards("dashboard-ready", readyPlans, renderReadyCard);
+  await renderPlanCards("dashboard-interacting", interactingPlans, renderInteractingCard, pedigreePermissionByPlanId);
+  await renderPlanCards("dashboard-leveling", levelingPlans, renderLevelingCard, pedigreePermissionByPlanId);
+  await renderPlanCards("dashboard-ready", readyPlans, renderReadyCard, pedigreePermissionByPlanId);
   await renderPlanCards("dashboard-completed", completedPlans, renderSimplePlanCard);
   await renderPlanCards("dashboard-pending-offspring", pendingOffspringPlans, renderSimplePlanCard);
 }
 
-async function renderPlanCards(containerId, plans, cardRenderer) {
+/** 血緣 warning 狀態的小提示（黃色／橘色文字），level 是 allowed 或未提供時不顯示任何東西 */
+function renderPedigreeWarningNote(permission) {
+  if (!permission || permission.level !== PEDIGREE_LEVEL.WARNING) return "";
+  return `<div class="pedigree-warning-note pedigree-warning-note-${permission.color}">${permission.message}</div>`;
+}
+
+async function renderPlanCards(containerId, plans, cardRenderer, pedigreePermissionByPlanId = null) {
   const container = document.getElementById(containerId);
   container.innerHTML = "";
 
@@ -100,9 +110,10 @@ async function renderPlanCards(containerId, plans, cardRenderer) {
 
   for (const plan of plans) {
     const [dogA, dogB] = await Promise.all([getDogById(plan.dogAId), getDogById(plan.dogBId)]);
+    const permission = pedigreePermissionByPlanId ? pedigreePermissionByPlanId.get(plan.id) : null;
     const cardEl = document.createElement("div");
     cardEl.className = "card";
-    cardEl.innerHTML = await cardRenderer(plan, dogA, dogB);
+    cardEl.innerHTML = await cardRenderer(plan, dogA, dogB, permission);
     container.appendChild(cardEl);
   }
 }
@@ -111,8 +122,7 @@ function pairLabel(dogA, dogB) {
   return `${dogA ? dogA.name : "未知"} × ${dogB ? dogB.name : "未知"}`;
 }
 
-async function renderInteractingCard(plan) {
-  const [dogA, dogB] = await Promise.all([getDogById(plan.dogAId), getDogById(plan.dogBId)]);
+async function renderInteractingCard(plan, dogA, dogB, permission) {
   const progress = plan.interactionProgress || 0;
   const target = plan.interactionTarget || 0;
   const percent = target > 0 ? Math.min(100, Math.round((progress / target) * 100)) : 0;
@@ -121,11 +131,11 @@ async function renderInteractingCard(plan) {
     <div class="dog-name">${pairLabel(dogA, dogB)}</div>
     <div class="dog-meta">互動 ${progress} / ${target}</div>
     <div class="progress-bar"><div class="progress-bar-fill" style="width:${percent}%"></div></div>
+    ${renderPedigreeWarningNote(permission)}
   `;
 }
 
-async function renderLevelingCard(plan) {
-  const [dogA, dogB] = await Promise.all([getDogById(plan.dogAId), getDogById(plan.dogBId)]);
+async function renderLevelingCard(plan, dogA, dogB, permission) {
   const lines = [];
   if (plan.dogALevelTarget) {
     lines.push(`${dogA ? dogA.name : "未知"}：Lv.${dogA?.level ?? "?"} / Lv.${plan.dogALevelTarget}`);
@@ -136,20 +146,21 @@ async function renderLevelingCard(plan) {
   return `
     <div class="dog-name">${pairLabel(dogA, dogB)}</div>
     <div class="dog-meta">${lines.join("<br/>") || "尚未設定等級目標"}</div>
+    ${renderPedigreeWarningNote(permission)}
   `;
 }
 
-async function renderReadyCard(plan) {
-  const [dogA, dogB] = await Promise.all([getDogById(plan.dogAId), getDogById(plan.dogBId)]);
+async function renderReadyCard(plan, dogA, dogB, permission) {
   const prediction = predictOffspring(dogA, dogB);
   const predictionLine = prediction.valid
     ? `下一代：${prediction.displayLabel}`
     : `純種／混種資料不足，無法預測`;
+  const pedigreeLine = permission && permission.level === PEDIGREE_LEVEL.WARNING ? permission.message : "血緣：通過";
 
   return `
     <div class="dog-name">${pairLabel(dogA, dogB)}</div>
     <div class="dog-meta">
-      血緣：通過<br/>
+      ${pedigreeLine}<br/>
       互動：完成<br/>
       等級：完成<br/>
       ${predictionLine}
@@ -158,8 +169,7 @@ async function renderReadyCard(plan) {
   `;
 }
 
-async function renderSimplePlanCard(plan) {
-  const [dogA, dogB] = await Promise.all([getDogById(plan.dogAId), getDogById(plan.dogBId)]);
+async function renderSimplePlanCard(plan, dogA, dogB) {
   return `
     <div class="dog-name">${pairLabel(dogA, dogB)}</div>
     <div class="dog-meta"><span class="tag tag-status-${plan.status}">${BREEDING_PLAN_STATUS_LABELS[plan.status] || plan.status}</span></div>

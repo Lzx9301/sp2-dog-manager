@@ -18,7 +18,7 @@ import { getActiveAccounts } from "../services/accountService.js";
 import { getActiveBreeds } from "../services/breedService.js";
 import { getAllEffects, MAX_EFFECTS_PER_DOG } from "../services/effectService.js";
 import { getAllPatterns } from "../services/patternService.js";
-import { checkPedigreeCompatibility, isPedigreeStatusAllowed, PEDIGREE_STATUS_LABELS } from "../utils/pedigreeService.js";
+import { checkPedigreeCompatibility, getPedigreePermission, PEDIGREE_LEVEL } from "../utils/pedigreeService.js";
 import { predictOffspring, formatTypeLevel } from "../utils/breedingPrediction.js";
 import { resolveParentRoles } from "../utils/parentRoleResolver.js";
 
@@ -47,6 +47,26 @@ async function loadReferenceData() {
 async function loadPlans() {
   plans = await getAllBreedingPlans();
   renderPlanList();
+}
+
+/**
+ * 嘗試標記配狗計畫完成。
+ * 如果 Service 層回報「需要確認」（血緣狀態是 warning：資料不足或確認有血緣但距離未知），
+ * 就跳一次確認對話框，使用者確認後才用 confirmPedigreeWarning: true 重新呼叫一次。
+ * 使用者取消的話就什麼都不做（維持原本狀態，不會拋出錯誤）。
+ */
+async function attemptCompleteBreedingPlan(planId) {
+  try {
+    await completeBreedingPlan(planId);
+  } catch (err) {
+    if (err.needsConfirmation) {
+      const confirmed = await confirmModal(err.message);
+      if (!confirmed) return;
+      await completeBreedingPlan(planId, { confirmPedigreeWarning: true });
+      return;
+    }
+    throw err;
+  }
 }
 
 function renderPlanList() {
@@ -78,25 +98,46 @@ async function renderPlanCard(plan, listEl) {
   // 只有在需要新增子代時才需要判定角色，判定失敗就不能開啟新增子代表單。
   const parentRoles = canAddOffspring ? resolveParentRoles(dogA, dogB) : null;
 
+  // 新增子代是「進行中」以外的動作（計畫已完成才會出現），但族譜仍可能在完成後又變動，
+  // 所以這裡額外即時檢查一次血緣狀態，不沿用上面 isHistorical 略過檢查的邏輯。
+  let offspringPedigreePermission = null;
+  if (canAddOffspring) {
+    const offspringPedigreeResult = await checkPedigreeCompatibility(plan.dogAId, plan.dogBId);
+    offspringPedigreePermission = getPedigreePermission(offspringPedigreeResult.status);
+  }
+
   // 血緣狀態即時重新檢查（不相信舊快照）：
   // 已完成／已取消的計畫是歷史紀錄，不需要（也不應該）重新檢查而動搖既有結果；
   // 其餘「進行中」的計畫（預計配/互動中/等待升級/準備完成/暫停）每次顯示都重新檢查一次，
   // 確保父母族譜之後若有變更，能即時反映在配狗中心。
+  //
+  // 重要：血緣狀態不是只有「有效／無效」兩種。只有 blocked（restricted，已確認三代內
+  // 有血緣）才是真正的無效配狗計畫。warning（insufficient_data 資料不足 /
+  // confirmed_related_unknown_distance 確認有親屬但不知道距離）代表「目前不知道」，
+  // 不等於「確認有血緣」，計畫仍然正常，只是完成計畫／新增子代時需要人工確認。
   const isHistorical =
     plan.status === BREEDING_PLAN_STATUS.COMPLETED || plan.status === BREEDING_PLAN_STATUS.CANCELLED;
 
   let livePedigreeResult = null;
+  let pedigreePermission = null;
   if (!isHistorical) {
     livePedigreeResult = await checkPedigreeCompatibility(plan.dogAId, plan.dogBId);
+    pedigreePermission = getPedigreePermission(livePedigreeResult.status);
   }
-  const isInvalid = !isHistorical && !isPedigreeStatusAllowed(livePedigreeResult.status);
-  const pedigreeStatusLabel = livePedigreeResult
-    ? PEDIGREE_STATUS_LABELS[livePedigreeResult.status] || livePedigreeResult.status
-    : PEDIGREE_STATUS_LABELS[plan.pedigreeStatus] || plan.pedigreeCheckResult || "（未檢查）";
 
-  const invalidBanner = isInvalid
-    ? `<div class="invalid-plan-banner">⚠ 無效配狗計畫：${pedigreeStatusLabel}（${livePedigreeResult.explanation}）</div>`
-    : "";
+  const isBlocked = !isHistorical && pedigreePermission.level === PEDIGREE_LEVEL.BLOCKED;
+  const isWarning = !isHistorical && pedigreePermission.level === PEDIGREE_LEVEL.WARNING;
+
+  const pedigreeStatusLabel = pedigreePermission
+    ? pedigreePermission.message
+    : getPedigreePermission(plan.pedigreeStatus).message;
+
+  let statusBannerHtml = "";
+  if (isBlocked) {
+    statusBannerHtml = `<div class="invalid-plan-banner">⚠ 無效配狗計畫：${pedigreeStatusLabel}（${livePedigreeResult.explanation}）</div>`;
+  } else if (isWarning) {
+    statusBannerHtml = `<div class="pedigree-warning-banner pedigree-warning-banner-${pedigreePermission.color}">${pedigreeStatusLabel}</div>`;
+  }
 
   // 純種／混種預測顯示：
   // - 如果計畫有存 prediction 快照（新版 createBreedingPlan 建立的），顯示「建立時預測」；
@@ -123,7 +164,7 @@ async function renderPlanCard(plan, listEl) {
   }
 
   card.innerHTML = `
-    ${invalidBanner}
+    ${statusBannerHtml}
     <div class="page-header" style="margin-bottom:8px;">
       <div class="dog-name">${dogA ? dogA.name : "未知"} × ${dogB ? dogB.name : "未知"}</div>
       <span class="tag tag-status-${plan.status}">${BREEDING_PLAN_STATUS_LABELS[plan.status] || plan.status}</span>
@@ -133,18 +174,18 @@ async function renderPlanCard(plan, listEl) {
       <div class="form-group">
         <label>互動進度</label>
         <div style="display:flex; gap:6px;">
-          <input type="number" class="plan-progress" value="${plan.interactionProgress ?? 0}" ${isInvalid ? "disabled" : ""} />
+          <input type="number" class="plan-progress" value="${plan.interactionProgress ?? 0}" ${isBlocked ? "disabled" : ""} />
           <span style="align-self:center;">/</span>
-          <input type="number" class="plan-target" value="${plan.interactionTarget ?? 0}" ${isInvalid ? "disabled" : ""} />
+          <input type="number" class="plan-target" value="${plan.interactionTarget ?? 0}" ${isBlocked ? "disabled" : ""} />
         </div>
       </div>
       <div class="form-group">
         <label>${dogA ? dogA.name : "A"} 等級目標</label>
-        <input type="number" class="plan-level-a" value="${plan.dogALevelTarget ?? ""}" ${isInvalid ? "disabled" : ""} />
+        <input type="number" class="plan-level-a" value="${plan.dogALevelTarget ?? ""}" ${isBlocked ? "disabled" : ""} />
       </div>
       <div class="form-group">
         <label>${dogB ? dogB.name : "B"} 等級目標</label>
-        <input type="number" class="plan-level-b" value="${plan.dogBLevelTarget ?? ""}" ${isInvalid ? "disabled" : ""} />
+        <input type="number" class="plan-level-b" value="${plan.dogBLevelTarget ?? ""}" ${isBlocked ? "disabled" : ""} />
       </div>
     </div>
 
@@ -154,19 +195,27 @@ async function renderPlanCard(plan, listEl) {
     </div>
 
     <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-      <button class="btn btn-secondary btn-small plan-save-btn" ${isInvalid ? "disabled" : ""}>儲存進度</button>
-      <select class="plan-status-select" ${isInvalid ? "disabled" : ""}>
+      <button class="btn btn-secondary btn-small plan-save-btn" ${isBlocked ? "disabled" : ""}>儲存進度</button>
+      <select class="plan-status-select" ${isBlocked ? "disabled" : ""}>
         ${Object.entries(BREEDING_PLAN_STATUS_LABELS)
           .map(([value, label]) => `<option value="${value}" ${plan.status === value ? "selected" : ""}>${label}</option>`)
           .join("")}
       </select>
       ${
         canAddOffspring
-          ? `<button class="btn btn-primary btn-small plan-add-offspring-btn" ${parentRoles.valid ? "" : "disabled"} title="${parentRoles.valid ? "" : parentRoles.errorMessage}">新增子代</button>`
+          ? `<button class="btn btn-primary btn-small plan-add-offspring-btn" ${
+              !parentRoles.valid || offspringPedigreePermission.level === PEDIGREE_LEVEL.BLOCKED ? "disabled" : ""
+            } title="${
+              !parentRoles.valid
+                ? parentRoles.errorMessage
+                : offspringPedigreePermission.level === PEDIGREE_LEVEL.BLOCKED
+                  ? offspringPedigreePermission.message
+                  : ""
+            }">新增子代</button>`
           : ""
       }
       ${
-        isInvalid
+        isBlocked
           ? `
         <button class="btn btn-secondary btn-small plan-cancel-btn">取消計畫</button>
         <button class="btn btn-danger btn-small plan-delete-btn">刪除測試資料</button>
@@ -190,7 +239,7 @@ async function renderPlanCard(plan, listEl) {
     const newStatus = e.target.value;
     try {
       if (newStatus === BREEDING_PLAN_STATUS.COMPLETED) {
-        await completeBreedingPlan(plan.id);
+        await attemptCompleteBreedingPlan(plan.id);
       } else {
         await updateBreedingPlan(plan.id, { status: newStatus });
       }
@@ -203,11 +252,21 @@ async function renderPlanCard(plan, listEl) {
 
   const offspringBtn = card.querySelector(".plan-add-offspring-btn");
   if (offspringBtn) {
-    offspringBtn.addEventListener("click", () => {
+    offspringBtn.addEventListener("click", async () => {
       // 防禦性再檢查一次（即使按鈕理論上已經是 disabled，避免萬一被繞過）
       if (!parentRoles || !parentRoles.valid) {
         alert((parentRoles && parentRoles.errorMessage) || "無法建立子代：此配狗計畫必須包含一隻公狗與一隻母狗。");
         return;
+      }
+      if (offspringPedigreePermission.level === PEDIGREE_LEVEL.BLOCKED) {
+        alert(offspringPedigreePermission.message);
+        return;
+      }
+      if (offspringPedigreePermission.level === PEDIGREE_LEVEL.WARNING) {
+        const confirmed = await confirmModal(
+          `${offspringPedigreePermission.message}\n\n是否仍要建立子代？`
+        );
+        if (!confirmed) return;
       }
       openAddOffspringModal(plan, parentRoles.father, parentRoles.mother);
     });

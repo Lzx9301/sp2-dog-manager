@@ -28,7 +28,7 @@ import {
   BREEDING_PLAN_STATUS_LABELS
 } from "../services/breedingPlanService.js";
 import { moveDogToAccount, getMovementLogsOfDog } from "../services/movementLogService.js";
-import { checkPedigreeCompatibility, wouldCreateCycle, isPedigreeStatusAllowed, PEDIGREE_STATUS_LABELS } from "../utils/pedigreeService.js";
+import { checkPedigreeCompatibility, wouldCreateCycle, getPedigreePermission, PEDIGREE_LEVEL } from "../utils/pedigreeService.js";
 import { predictOffspring, formatTypeLevel } from "../utils/breedingPrediction.js";
 import { resolveParentRoles } from "../utils/parentRoleResolver.js";
 import { GENDER_LABELS, DOG_TYPE_LABELS, SOURCE_TYPE_LABELS } from "../utils/constants.js";
@@ -468,8 +468,16 @@ function openAddBreedingModal() {
         if (!partner) return;
 
         const pedigreeResult = await checkPedigreeCompatibility(dogId, partnerId);
-        const pedigreeAllowed = isPedigreeStatusAllowed(pedigreeResult.status);
-        const pedigreeStatusLabel = PEDIGREE_STATUS_LABELS[pedigreeResult.status] || pedigreeResult.status;
+        const pedigreePermission = getPedigreePermission(pedigreeResult.status);
+        const pedigreeStatusLabel = pedigreePermission.message;
+        const pedigreeColor =
+          pedigreePermission.level === PEDIGREE_LEVEL.BLOCKED
+            ? "var(--color-danger)"
+            : pedigreePermission.level === PEDIGREE_LEVEL.WARNING
+              ? pedigreePermission.color === "orange"
+                ? "var(--color-warning)"
+                : "#8a6d1a"
+              : "var(--color-primary-dark)";
 
         // 注意：predictOffspring 的 parentA/parentB 只是計算用的兩個輸入位置，
         // 不代表誰是父親、誰是母親（真正的父母角色判定在下面用 resolveParentRoles）
@@ -499,7 +507,7 @@ function openAddBreedingModal() {
           <div><strong>配對：</strong>${dog.name} × ${partner.name}</div>
           <div>
             <strong>血緣檢查：</strong>
-            <span style="font-weight:700; color:${pedigreeAllowed ? "var(--color-primary-dark)" : "var(--color-danger)"};">${pedigreeStatusLabel}</span>
+            <span style="font-weight:700; color:${pedigreeColor};">${pedigreeStatusLabel}</span>
           </div>
           <div class="dog-meta">${pedigreeResult.explanation}</div>
 
@@ -509,19 +517,33 @@ function openAddBreedingModal() {
           </div>
           ${predictionHtml}
           ${genderWarning}
-          ${!pedigreeAllowed ? `<div style="color:var(--color-danger); font-weight:700; margin-top:6px;">⚠ ${pedigreeStatusLabel}，不可建立配狗計畫</div>` : ""}
+          ${
+            pedigreePermission.level === PEDIGREE_LEVEL.BLOCKED
+              ? `<div style="color:var(--color-danger); font-weight:700; margin-top:6px;">⚠ ${pedigreeStatusLabel}，不可建立配狗計畫</div>`
+              : ""
+          }
         `;
 
-        const canCreate = pedigreeAllowed && prediction.valid;
+        // 三層邏輯：只有 blocked（restricted）才真正禁用按鈕。
+        // warning（資料不足／確認有血緣但距離未知）不禁用按鈕，只是點擊建立時會先跳一次確認。
+        const predictionOk = prediction.valid;
+        const canCreate = pedigreePermission.level !== PEDIGREE_LEVEL.BLOCKED && predictionOk;
         saveBtn.style.display = "inline-block";
         saveBtn.disabled = !canCreate;
-        if (!pedigreeAllowed) {
+
+        if (pedigreePermission.level === PEDIGREE_LEVEL.BLOCKED) {
           saveBtn.textContent = `${pedigreeStatusLabel}，不可建立`;
-        } else if (!prediction.valid) {
+        } else if (!predictionOk) {
           saveBtn.textContent = "純種／混種資料不足，不可建立";
+        } else if (pedigreePermission.level === PEDIGREE_LEVEL.WARNING) {
+          saveBtn.textContent = "建立配狗計畫（需確認血緣警示）";
         } else {
           saveBtn.textContent = "建立配狗計畫";
         }
+
+        // 存起來給 save 按鈕的 click handler 用，判斷是否需要先跳確認
+        saveBtn.dataset.pedigreeLevel = pedigreePermission.level;
+        saveBtn.dataset.pedigreeMessage = pedigreePermission.message;
       }
 
       saveBtn.addEventListener("click", async () => {
@@ -530,6 +552,14 @@ function openAddBreedingModal() {
           return;
         }
         modalEl.querySelector("#b-error").textContent = "";
+
+        // warning 狀態：建立前先跳一次確認，使用者取消就不繼續（restricted 已經在按鈕
+        // disabled 擋掉，走不到這裡；allowed 不需要確認，直接往下建立）
+        if (saveBtn.dataset.pedigreeLevel === PEDIGREE_LEVEL.WARNING) {
+          const confirmed = await confirmModal(`${saveBtn.dataset.pedigreeMessage}\n\n是否仍要建立配狗計畫？`);
+          if (!confirmed) return;
+        }
+
         try {
           // 注意：這裡不再傳任何預測相關欄位（offspringType / predictedPurityMixDegree 等）。
           // createBreedingPlan 會自己重新載入雙方資料、重新計算，不信任前端傳入的預測結果。
