@@ -19,6 +19,8 @@ import {
   isPedigreeStatusAllowed,
   PEDIGREE_STATUS_LABELS
 } from "../utils/pedigreeService.js";
+import { predictOffspring } from "../utils/breedingPrediction.js";
+import { getDogById } from "./dogService.js";
 
 const COLLECTION_NAME = "breedingPlans";
 
@@ -100,7 +102,13 @@ export async function getPartnerIdsOf(dogId) {
  * 不要只依賴 UI 的按鈕 disabled，那只是第一道防線（避免使用者誤按），
  * 真正擋住不合法資料的關卡在這裡。
  *
- * @throws {Error} 當血緣檢查結果不允許配狗時，錯誤訊息為中文，可直接顯示給使用者
+ * 重要（純種／混種預測防呆，同樣不信任前端）：
+ * 這裡會重新從 Firestore 載入 dogA、dogB 的目前資料，重新呼叫全站共用的
+ * predictOffspring()。即使呼叫端在 planData 裡傳了 offspringType / offspringLevel /
+ * predictedPurity / prediction 之類的欄位，一律忽略，只採用這裡重新計算的結果。
+ * 如果兩隻狗的純種／混種資料不完整或無效，直接擋下，不會建立任何資料。
+ *
+ * @throws {Error} 當血緣檢查或純種／混種預測不允許配狗時，錯誤訊息為中文，可直接顯示給使用者
  */
 export async function createBreedingPlan(planData) {
   const pedigreeResult = await checkPedigreeCompatibility(planData.dogAId, planData.dogBId);
@@ -109,6 +117,16 @@ export async function createBreedingPlan(planData) {
     const label = PEDIGREE_STATUS_LABELS[pedigreeResult.status] || pedigreeResult.status;
     const error = new Error(`無法建立配狗計畫：${label}。${pedigreeResult.explanation}`);
     error.pedigreeStatus = pedigreeResult.status;
+    throw error;
+  }
+
+  // 重新載入雙親目前的資料，重新呼叫共用預測函式（不信任 planData 裡任何預測相關欄位）
+  const [dogA, dogB] = await Promise.all([getDogById(planData.dogAId), getDogById(planData.dogBId)]);
+  const prediction = predictOffspring(dogA, dogB);
+
+  if (!prediction.valid) {
+    const error = new Error(`無法建立配狗計畫：${prediction.errorMessage}`);
+    error.predictionErrorCode = prediction.errorCode;
     throw error;
   }
 
@@ -121,7 +139,24 @@ export async function createBreedingPlan(planData) {
     interactionTarget: planData.interactionTarget ?? null,
     dogALevelTarget: planData.dogALevelTarget ?? null,
     dogBLevelTarget: planData.dogBLevelTarget ?? null,
-    predictedPurityMixDegree: planData.predictedPurityMixDegree ?? null,
+    // 相容欄位：舊架構讀取 predictedPurityMixDegree 的地方仍然能正常運作，
+    // 但值一律來自這裡重新計算的結果，不使用前端傳入的舊欄位。
+    predictedPurityMixDegree: prediction.offspringLevel,
+    // 純種／混種預測快照：只作為「建立當下」的紀錄／顯示參考。
+    // 配狗中心顯示時，仍會視需要用目前狗狗資料重新計算最新結果，不會永久相信這份舊快照。
+    prediction: {
+      offspringType: prediction.offspringType,
+      offspringLevel: prediction.offspringLevel,
+      calculation: {
+        parentAType: prediction.parents.parentA.type,
+        parentAOriginalLevel: prediction.parents.parentA.originalLevel,
+        parentAUsedLevel: prediction.parents.parentA.usedLevel,
+        parentBType: prediction.parents.parentB.type,
+        parentBOriginalLevel: prediction.parents.parentB.originalLevel,
+        parentBUsedLevel: prediction.parents.parentB.usedLevel
+      },
+      calculatedAt: now
+    },
     // 血緣檢查快照：建立當下的檢查結果，只作為紀錄／顯示參考。
     // 注意：配狗中心與工作台顯示時，仍會針對進行中的計畫「即時重新檢查」，
     // 不會永久相信這裡存的舊快照（避免父母族譜之後變更導致誤判）。
@@ -136,7 +171,7 @@ export async function createBreedingPlan(planData) {
     completedAt: null
   });
 
-  return { id: docRef.id, ...planData, pedigreeStatus: pedigreeResult.status };
+  return { id: docRef.id, ...planData, pedigreeStatus: pedigreeResult.status, prediction };
 }
 
 export async function updateBreedingPlan(id, partialData) {
