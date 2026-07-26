@@ -44,7 +44,8 @@ export const PREDICTION_ERROR_CODES = {
 /**
  * 將單一狗狗資料正規化成預測用的內部格式。
  * @param {{dogType?: string, purityMixDegree?: number}|null|undefined} dog
- * @param {string} label - 用於錯誤訊息，例如「父方」「母方」
+ * @param {string} label - 用於錯誤訊息，例如「狗狗 A」「狗狗 B」（注意：這裡不代表父親／母親，
+ *   只是計算用的兩個輸入位置；真正的父母角色判定請用 parentRoleResolver.js 的 resolveParentRoles）
  * @returns {{valid: true, type: "pure"|"mixed", originalLevel: number} | {valid: false, errorCode: string, errorMessage: string}}
  */
 function normalizeParent(dog, label) {
@@ -123,10 +124,10 @@ function normalizeParent(dog, label) {
  * }
  */
 export function predictOffspring(parentA, parentB) {
-  const a = normalizeParent(parentA, "父方");
+  const a = normalizeParent(parentA, "狗狗 A");
   if (!a.valid) return { valid: false, errorCode: a.errorCode, errorMessage: a.errorMessage };
 
-  const b = normalizeParent(parentB, "母方");
+  const b = normalizeParent(parentB, "狗狗 B");
   if (!b.valid) return { valid: false, errorCode: b.errorCode, errorMessage: b.errorMessage };
 
   const bothPure = a.type === "pure" && b.type === "pure";
