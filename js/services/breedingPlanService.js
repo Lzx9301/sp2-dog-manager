@@ -20,6 +20,7 @@ import {
   PEDIGREE_STATUS_LABELS
 } from "../utils/pedigreeService.js";
 import { predictOffspring } from "../utils/breedingPrediction.js";
+import { canCompleteBreedingPlan } from "../utils/breedingPlanValidation.js";
 import { getDogById } from "./dogService.js";
 
 const COLLECTION_NAME = "breedingPlans";
@@ -184,23 +185,54 @@ export async function updateBreedingPlan(id, partialData) {
 /**
  * 標記配狗計畫完成
  *
- * 同樣加上血緣防呆（第二道防線）：即使計畫先前建立時是合法的，
- * 如果父母族譜後來有變化導致現在重新檢查變成不允許配狗的狀態，
- * 這裡會擋下「標記完成」這個動作，避免產生不合法的完成紀錄。
+ * 血緣防呆（第二道防線）：即使計畫先前建立時是合法的，如果父母族譜後來有變化
+ * 導致現在重新檢查變成不允許配狗的狀態，這裡會擋下「標記完成」這個動作。
+ *
+ * 純種／混種預測防呆（同樣不信任任何舊快照）：完成計畫前會重新從 Firestore
+ * 載入 dogA、dogB「目前」的資料，重新呼叫 predictOffspring()。如果預測資料
+ * 無效（型別缺失、數值缺失或無效），一樣擋下並拋出中文錯誤，不會標記完成。
+ * 兩項檢查都通過後，才會真的標記完成，並同步把最新的 prediction 快照存回去
+ * （predictedPurityMixDegree 等相容欄位也一併更新，來源是同一個新計算結果）。
  */
 export async function completeBreedingPlan(id) {
   const plan = await getBreedingPlanById(id);
   if (!plan) throw new Error("找不到指定的配狗計畫");
 
-  const pedigreeResult = await checkPedigreeCompatibility(plan.dogAId, plan.dogBId);
-  if (!isPedigreeStatusAllowed(pedigreeResult.status)) {
-    const label = PEDIGREE_STATUS_LABELS[pedigreeResult.status] || pedigreeResult.status;
-    throw new Error(`無法標記完成：${label}。這筆配狗計畫的血緣狀態不允許配狗，請改為取消或刪除這筆計畫。`);
+  const [pedigreeResult, dogA, dogB] = await Promise.all([
+    checkPedigreeCompatibility(plan.dogAId, plan.dogBId),
+    getDogById(plan.dogAId),
+    getDogById(plan.dogBId)
+  ]);
+  const prediction = predictOffspring(dogA, dogB);
+
+  const decision = canCompleteBreedingPlan(pedigreeResult, prediction);
+  if (!decision.allowed) {
+    throw new Error(`無法標記完成：${decision.reason}`);
   }
 
+  const now = new Date().toISOString();
   await updateBreedingPlan(id, {
     status: BREEDING_PLAN_STATUS.COMPLETED,
-    completedAt: new Date().toISOString()
+    completedAt: now,
+    // 完成時同步更新最新預測快照，不相信計畫建立當下的舊快照
+    predictedPurityMixDegree: prediction.offspringLevel,
+    prediction: {
+      offspringType: prediction.offspringType,
+      offspringLevel: prediction.offspringLevel,
+      calculation: {
+        parentAType: prediction.parents.parentA.type,
+        parentAOriginalLevel: prediction.parents.parentA.originalLevel,
+        parentAUsedLevel: prediction.parents.parentA.usedLevel,
+        parentBType: prediction.parents.parentB.type,
+        parentBOriginalLevel: prediction.parents.parentB.originalLevel,
+        parentBUsedLevel: prediction.parents.parentB.usedLevel
+      },
+      calculatedAt: now
+    },
+    pedigreeStatus: pedigreeResult.status,
+    pedigreeReason: pedigreeResult.explanation,
+    pedigreeDistance: pedigreeResult.distance,
+    pedigreeCheckedAt: now
   });
 }
 
