@@ -9,6 +9,7 @@ import {
   BREEDING_PLAN_STATUS_LABELS
 } from "../services/breedingPlanService.js";
 import { getDogById } from "../services/dogService.js";
+import { checkPedigreeCompatibility, isPedigreeStatusAllowed } from "../utils/pedigreeService.js";
 
 const loginScreen = document.getElementById("login-screen");
 const mainScreen = document.getElementById("main-screen");
@@ -46,9 +47,30 @@ document.getElementById("login-btn").addEventListener("click", async () => {
 async function loadDashboard() {
   const plans = await getAllBreedingPlans();
 
-  const interactingPlans = plans.filter((p) => p.status === BREEDING_PLAN_STATUS.INTERACTING);
-  const levelingPlans = plans.filter((p) => p.status === BREEDING_PLAN_STATUS.LEVELING);
-  const readyPlans = plans.filter((p) => p.status === BREEDING_PLAN_STATUS.READY);
+  // 「進行中」的計畫（尚未完成也尚未取消）在顯示於工作台前，
+  // 一律即時重新檢查血緣狀態，restricted / insufficient_data 等不允許配狗的
+  // 計畫直接從工作台隱藏（不出現在待互動/待練等/準備完成任何區塊），
+  // 只會出現在「配狗中心」並標示為無效計畫，讓你去處理（取消或刪除）。
+  const activeStatusSet = new Set([
+    BREEDING_PLAN_STATUS.PLANNED,
+    BREEDING_PLAN_STATUS.INTERACTING,
+    BREEDING_PLAN_STATUS.LEVELING,
+    BREEDING_PLAN_STATUS.READY,
+    BREEDING_PLAN_STATUS.PAUSED
+  ]);
+  const activePlans = plans.filter((p) => activeStatusSet.has(p.status));
+
+  const validActivePlans = [];
+  for (const plan of activePlans) {
+    const pedigreeResult = await checkPedigreeCompatibility(plan.dogAId, plan.dogBId);
+    if (isPedigreeStatusAllowed(pedigreeResult.status)) {
+      validActivePlans.push(plan);
+    }
+  }
+
+  const interactingPlans = validActivePlans.filter((p) => p.status === BREEDING_PLAN_STATUS.INTERACTING);
+  const levelingPlans = validActivePlans.filter((p) => p.status === BREEDING_PLAN_STATUS.LEVELING);
+  const readyPlans = validActivePlans.filter((p) => p.status === BREEDING_PLAN_STATUS.READY);
   const completedPlans = plans
     .filter((p) => p.status === BREEDING_PLAN_STATUS.COMPLETED)
     .sort((a, b) => new Date(b.completedAt || 0) - new Date(a.completedAt || 0))

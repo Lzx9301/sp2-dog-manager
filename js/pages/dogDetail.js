@@ -28,7 +28,7 @@ import {
   BREEDING_PLAN_STATUS_LABELS
 } from "../services/breedingPlanService.js";
 import { moveDogToAccount, getMovementLogsOfDog } from "../services/movementLogService.js";
-import { checkPedigreeCompatibility, wouldCreateCycle } from "../utils/pedigreeService.js";
+import { checkPedigreeCompatibility, wouldCreateCycle, isPedigreeStatusAllowed, PEDIGREE_STATUS_LABELS } from "../utils/pedigreeService.js";
 import { calculateOffspringPurityDegree } from "../utils/purityCalculator.js";
 import { GENDER_LABELS, DOG_TYPE_LABELS, SOURCE_TYPE_LABELS } from "../utils/constants.js";
 
@@ -467,6 +467,8 @@ function openAddBreedingModal() {
         if (!partner) return;
 
         const [pedigreeResult] = await Promise.all([checkPedigreeCompatibility(dogId, partnerId)]);
+        const allowed = isPedigreeStatusAllowed(pedigreeResult.status);
+        const statusLabel = PEDIGREE_STATUS_LABELS[pedigreeResult.status] || pedigreeResult.status;
 
         let predictedPurity = null;
         try {
@@ -483,14 +485,22 @@ function openAddBreedingModal() {
         previewEl.style.display = "block";
         previewEl.innerHTML = `
           <div><strong>配對：</strong>${dog.name} × ${partner.name}</div>
-          <div><strong>血緣檢查：</strong>${pedigreeResult.explanation}</div>
+          <div>
+            <strong>血緣檢查：</strong>
+            <span style="font-weight:700; color:${allowed ? "var(--color-primary-dark)" : "var(--color-danger)"};">${statusLabel}</span>
+          </div>
+          <div class="dog-meta">${pedigreeResult.explanation}</div>
           <div><strong>父方純／混度：</strong>${dog.purityMixDegree ?? "-"}　<strong>母方純／混度：</strong>${partner.purityMixDegree ?? "-"}</div>
           <div><strong>預計下一代純／混度：</strong>${predictedPurity ?? "無法計算"}</div>
           ${genderWarning}
+          ${!allowed ? `<div style="color:var(--color-danger); font-weight:700; margin-top:6px;">⚠ ${statusLabel}，不可建立配狗計畫</div>` : ""}
         `;
         previewEl.dataset.pedigreeStatus = pedigreeResult.status;
         previewEl.dataset.predictedPurity = predictedPurity ?? "";
+
         saveBtn.style.display = "inline-block";
+        saveBtn.disabled = !allowed;
+        saveBtn.textContent = allowed ? "建立配狗計畫" : `${statusLabel}，不可建立`;
       }
 
       saveBtn.addEventListener("click", async () => {
@@ -498,6 +508,7 @@ function openAddBreedingModal() {
           modalEl.querySelector("#b-error").textContent = "請先選擇配對對象";
           return;
         }
+        modalEl.querySelector("#b-error").textContent = "";
         try {
           await createBreedingPlan({
             dogAId: dogId,
@@ -505,13 +516,12 @@ function openAddBreedingModal() {
             status: BREEDING_PLAN_STATUS.PLANNED,
             predictedPurityMixDegree: previewEl.dataset.predictedPurity
               ? Number(previewEl.dataset.predictedPurity)
-              : null,
-            pedigreeCheckResult: previewEl.dataset.pedigreeStatus
+              : null
           });
           close();
           await loadDog();
         } catch (err) {
-          modalEl.querySelector("#b-error").textContent = "建立失敗，請稍後再試";
+          modalEl.querySelector("#b-error").textContent = err.message || "建立失敗，請稍後再試";
           console.error(err);
         }
       });
