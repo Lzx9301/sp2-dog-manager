@@ -14,6 +14,7 @@
 import {
   checkPedigreeCompatibilityCore,
   wouldCreateCycleCore,
+  isPedigreeStatusAllowed,
   PEDIGREE_RESTRICTED_GENERATIONS
 } from "../js/utils/pedigreeService.js";
 
@@ -247,3 +248,39 @@ async function runCycleTests() {
 }
 
 await runCycleTests();
+
+// --------------------------------------------------
+// isPedigreeStatusAllowed 測試（配狗防呆的分類依據）
+// --------------------------------------------------
+// 這組測試直接對應「配狗系統血緣防呆」的規則：
+// 只有 outside_restricted_generations / no_known_relation 允許建立配狗計畫，
+// 其餘一律預設不允許（restricted 是遊戲規則明確禁止；insufficient_data 與
+// confirmed_related_unknown_distance 則是資料不夠明確，保守起見一律擋下）。
+const allowStatusTestCases = [
+  { status: "restricted", expected: false },
+  { status: "outside_restricted_generations", expected: true },
+  { status: "no_known_relation", expected: true },
+  { status: "insufficient_data", expected: false },
+  { status: "confirmed_related_unknown_distance", expected: false }
+];
+
+function runAllowStatusTests() {
+  console.log("\n--- isPedigreeStatusAllowed 測試 ---");
+  let passed = 0;
+  let failed = 0;
+
+  for (const testCase of allowStatusTestCases) {
+    const result = isPedigreeStatusAllowed(testCase.status);
+    if (result === testCase.expected) {
+      console.log(`✅ ${testCase.status} -> allowed=${result}`);
+      passed++;
+    } else {
+      console.log(`❌ ${testCase.status} -> 期望 allowed=${testCase.expected}，實際 allowed=${result}`);
+      failed++;
+    }
+  }
+
+  console.log(`\n共 ${allowStatusTestCases.length} 筆測試，通過 ${passed}，失敗 ${failed}`);
+}
+
+runAllowStatusTests();
