@@ -19,6 +19,7 @@ import { getActiveBreeds } from "../services/breedService.js";
 import { getAllEffects, MAX_EFFECTS_PER_DOG } from "../services/effectService.js";
 import { getAllPatterns } from "../services/patternService.js";
 import { checkPedigreeCompatibility, isPedigreeStatusAllowed, PEDIGREE_STATUS_LABELS } from "../utils/pedigreeService.js";
+import { predictOffspring, formatTypeLevel } from "../utils/breedingPrediction.js";
 
 await requireLogin();
 renderNav("breeding.html");
@@ -91,6 +92,30 @@ async function renderPlanCard(plan, listEl) {
     ? `<div class="invalid-plan-banner">⚠ 無效配狗計畫：${pedigreeStatusLabel}（${livePedigreeResult.explanation}）</div>`
     : "";
 
+  // 純種／混種預測顯示：
+  // - 如果計畫有存 prediction 快照（新版 createBreedingPlan 建立的），顯示「建立時預測」；
+  //   同時用目前兩隻狗的資料即時重算一次，如果結果跟快照不同（表示父母資料事後被修改過），
+  //   額外顯示「目前重新計算」讓你知道結果已經變了。
+  // - 如果是舊資料、沒有 prediction 快照，直接用目前資料即時計算，不會顯示 NaN，
+  //   算不出來就顯示「純種／混種資料不足，無法預測」，不會刪除這筆舊計畫。
+  const livePrediction = predictOffspring(dogA, dogB);
+  let predictionHtml;
+  if (plan.prediction && plan.prediction.offspringType) {
+    const snapshotLabel = formatTypeLevel(plan.prediction.offspringType, plan.prediction.offspringLevel);
+    predictionHtml = `建立時預測：${snapshotLabel}`;
+    if (livePrediction.valid) {
+      if (livePrediction.displayLabel !== snapshotLabel) {
+        predictionHtml += `<br/>目前資料重新計算：${livePrediction.displayLabel}`;
+      }
+    } else {
+      predictionHtml += `<br/>⚠ 目前資料重新計算失敗：${livePrediction.errorMessage}`;
+    }
+  } else if (livePrediction.valid) {
+    predictionHtml = `預計下一代：${livePrediction.displayLabel}`;
+  } else {
+    predictionHtml = `純種／混種資料不足，無法預測`;
+  }
+
   card.innerHTML = `
     ${invalidBanner}
     <div class="page-header" style="margin-bottom:8px;">
@@ -119,7 +144,7 @@ async function renderPlanCard(plan, listEl) {
 
     <div class="dog-meta">
       血緣判斷：${pedigreeStatusLabel}　
-      預計下一代純／混度：${plan.predictedPurityMixDegree ?? "-"}
+      ${predictionHtml}
     </div>
 
     <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
@@ -201,12 +226,18 @@ function openAddOffspringModal(plan, dogA, dogB) {
   const patternOptions = patterns.map((p) => `<option value="${p.id}">${p.canonicalName}</option>`).join("");
   const today = new Date().toISOString().slice(0, 10);
 
+  // 用「目前」兩隻狗的資料重新計算一次預測（不要相信計畫建立當下的舊快照），
+  // 這樣即使父母資料在配狗計畫建立後有被修改過，新增子代時也會用最新資料計算。
+  const prediction = predictOffspring(dogA, dogB);
+  const predictionInfoHtml = prediction.valid
+    ? `父：${dogA ? dogA.name : "未知"}　母：${dogB ? dogB.name : "未知"}<br/>自動帶入：${prediction.displayLabel}`
+    : `父：${dogA ? dogA.name : "未知"}　母：${dogB ? dogB.name : "未知"}<br/><span style="color:var(--color-danger);">⚠ ${prediction.errorMessage}</span>`;
+
   const { close, el } = openModal({
     title: "新增子代",
     contentHtml: `
       <div class="dog-meta" style="margin-bottom:10px;">
-        父：${dogA ? dogA.name : "未知"}　母：${dogB ? dogB.name : "未知"}<br/>
-        自動帶入純／混度：${plan.predictedPurityMixDegree ?? "-"}
+        ${predictionInfoHtml}
       </div>
 
       <div class="form-row">
@@ -224,7 +255,10 @@ function openAddOffspringModal(plan, dogA, dogB) {
         </div>
         <div class="form-group">
           <label>純種／混種</label>
-          <select id="o-dogtype"><option value="pure">純種</option><option value="mixed">混種</option></select>
+          <select id="o-dogtype">
+            <option value="pure" ${prediction.valid && prediction.offspringType === "pure" ? "selected" : ""}>純種</option>
+            <option value="mixed" ${prediction.valid && prediction.offspringType === "mixed" ? "selected" : ""}>混種</option>
+          </select>
         </div>
       </div>
       <div class="form-group" id="o-effects-group"><label>特效（最多 ${MAX_EFFECTS_PER_DOG}）</label>${effectCheckboxes}</div>
@@ -239,7 +273,7 @@ function openAddOffspringModal(plan, dogA, dogB) {
       <div id="o-error" style="color:#b3543f; font-size:13px;"></div>
       <div class="modal-actions">
         <button type="button" class="btn btn-secondary" data-action="cancel">取消</button>
-        <button type="button" class="btn btn-primary" data-action="save">建立子代</button>
+        <button type="button" class="btn btn-primary" data-action="save" ${prediction.valid ? "" : "disabled"}>建立子代</button>
       </div>
     `,
     onMount: (modalEl, close) => {
@@ -253,15 +287,23 @@ function openAddOffspringModal(plan, dogA, dogB) {
       const dogTypeSelect = modalEl.querySelector("#o-dogtype");
       const effectsGroup = modalEl.querySelector("#o-effects-group");
       const patternGroup = modalEl.querySelector("#o-pattern-group");
-      dogTypeSelect.addEventListener("change", () => {
+      function syncEffectsPatternVisibility() {
         const isPure = dogTypeSelect.value === "pure";
         effectsGroup.style.display = isPure ? "block" : "none";
         patternGroup.style.display = isPure ? "none" : "block";
-      });
+      }
+      dogTypeSelect.addEventListener("change", syncEffectsPatternVisibility);
+      syncEffectsPatternVisibility(); // 依預測結果預選的類型，一開始就要同步顯示對應區塊
 
       modalEl.querySelector('[data-action="cancel"]').addEventListener("click", close);
       modalEl.querySelector('[data-action="save"]').addEventListener("click", async () => {
         const errorEl = modalEl.querySelector("#o-error");
+
+        if (!prediction.valid) {
+          errorEl.textContent = prediction.errorMessage;
+          return;
+        }
+
         const name = modalEl.querySelector("#o-name").value.trim();
         if (!name) {
           errorEl.textContent = "請輸入名稱";
@@ -285,7 +327,7 @@ function openAddOffspringModal(plan, dogA, dogB) {
             dogType,
             effects: dogType === "pure" ? selectedEffectIds : [],
             patternId: dogType === "mixed" ? modalEl.querySelector("#o-pattern").value || null : null,
-            purityMixDegree: plan.predictedPurityMixDegree ?? 0,
+            purityMixDegree: prediction.offspringLevel,
             level: 1,
             sourceType: "self_bred",
             sourcePerson: "",

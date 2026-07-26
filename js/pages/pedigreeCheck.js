@@ -5,7 +5,7 @@ import { requireLogin } from "../services/authService.js";
 import { renderNav } from "../components/nav.js";
 import { searchDogs, getAllDogs, getDogById } from "../services/dogService.js";
 import { checkPedigreeCompatibility, scanRebreedCandidates } from "../utils/pedigreeService.js";
-import { calculateOffspringPurityDegree } from "../utils/purityCalculator.js";
+import { predictOffspring } from "../utils/breedingPrediction.js";
 import { getAccountById } from "../services/accountService.js";
 
 await requireLogin();
@@ -74,12 +74,10 @@ document.getElementById("check-btn").addEventListener("click", async () => {
     checkPedigreeCompatibility(selectedDogAId, selectedDogBId)
   ]);
 
-  let predictedPurity = null;
-  try {
-    predictedPurity = calculateOffspringPurityDegree(dogA.purityMixDegree, dogB.purityMixDegree);
-  } catch (e) {
-    predictedPurity = null;
-  }
+  const prediction = predictOffspring(dogA, dogB);
+  const predictionLine = prediction.valid
+    ? `<div><strong>預計下一代：</strong>${prediction.displayLabel}</div>`
+    : `<div style="color:var(--color-danger);"><strong>預計下一代：</strong>${prediction.errorMessage}</div>`;
 
   resultEl.innerHTML = `
     <div><strong>結果：</strong>${STATUS_LABELS[result.status] || result.status}</div>
@@ -92,7 +90,7 @@ document.getElementById("check-btn").addEventListener("click", async () => {
             .join(" → ")}</div>`
         : ""
     }
-    <div><strong>預計下一代純／混度：</strong>${predictedPurity ?? "無法計算"}</div>
+    ${predictionLine}
   `;
 });
 
@@ -130,17 +128,15 @@ document.getElementById("scan-btn").addEventListener("click", async () => {
       items.map(async (item) => {
         const candidate = await getDogById(item.candidateId);
         const account = candidate ? await getAccountById(candidate.accountId) : null;
-        let predictedPurity = null;
-        try {
-          predictedPurity = calculateOffspringPurityDegree(targetDog.purityMixDegree, candidate.purityMixDegree);
-        } catch (e) {}
+        const prediction = predictOffspring(targetDog, candidate);
+        const predictionText = prediction.valid ? prediction.displayLabel : "資料不足，無法預測";
 
         return `
           <div style="padding:6px 0; border-bottom:1px solid var(--color-border);">
             <a href="dog-detail.html?id=${item.candidateId}">${candidate ? candidate.name : "未知"}</a>
             　帳號：${account ? account.accountName : "（無）"}
             　血緣狀態：${STATUS_LABELS[item.status] || item.status}
-            　預計下一代純／混度：${predictedPurity ?? "-"}
+            　預計下一代：${predictionText}
           </div>
         `;
       })

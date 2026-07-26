@@ -10,6 +10,7 @@ import {
 } from "../services/breedingPlanService.js";
 import { getDogById } from "../services/dogService.js";
 import { checkPedigreeCompatibility, isPedigreeStatusAllowed } from "../utils/pedigreeService.js";
+import { predictOffspring } from "../utils/breedingPrediction.js";
 
 const loginScreen = document.getElementById("login-screen");
 const mainScreen = document.getElementById("main-screen");
@@ -140,12 +141,18 @@ async function renderLevelingCard(plan) {
 
 async function renderReadyCard(plan) {
   const [dogA, dogB] = await Promise.all([getDogById(plan.dogAId), getDogById(plan.dogBId)]);
+  const prediction = predictOffspring(dogA, dogB);
+  const predictionLine = prediction.valid
+    ? `下一代：${prediction.displayLabel}`
+    : `純種／混種資料不足，無法預測`;
+
   return `
     <div class="dog-name">${pairLabel(dogA, dogB)}</div>
     <div class="dog-meta">
       血緣：通過<br/>
       互動：完成<br/>
-      等級：完成
+      等級：完成<br/>
+      ${predictionLine}
     </div>
     <a class="btn btn-primary btn-small" href="breeding.html?planId=${plan.id}" style="margin-top:8px; display:inline-block;">前往配狗中心</a>
   `;
