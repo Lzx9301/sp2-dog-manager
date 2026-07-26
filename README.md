@@ -128,7 +128,11 @@ dogAId, dogBId, relationType（固定為 "confirmed_related"）, source, notes, 
 > 雙向關係；只對這一對狗生效，不延伸判斷子代。
 
 ### `breedingPlans`
-dogAId, dogBId, status, interactionProgress, interactionTarget, dogALevelTarget, dogBLevelTarget, predictedPurityMixDegree, pedigreeCheckResult, notes, offspringCreated（第一版新增，標記是否已經走過新增子代流程）, createdAt, updatedAt, completedAt
+dogAId, dogBId, status, interactionProgress, interactionTarget, dogALevelTarget, dogBLevelTarget, notes, offspringCreated, createdAt, updatedAt, completedAt
+
+血緣檢查快照：pedigreeStatus, pedigreeReason, pedigreeDistance, pedigreeCheckedAt（`createBreedingPlan` 建立時重新檢查後存下，僅供顯示參考，實際判斷一律以配狗中心／工作台即時重新檢查為準）
+
+純種／混種預測快照：predictedPurityMixDegree（相容欄位）, prediction: { offspringType, offspringLevel, calculation: { parentAType, parentAOriginalLevel, parentAUsedLevel, parentBType, parentBOriginalLevel, parentBUsedLevel }, calculatedAt }（同樣由 `createBreedingPlan` 重新計算後存下，不信任前端傳入的任何預測欄位）
 
 狀態常數（`breedingPlanService.BREEDING_PLAN_STATUS`）：
 `planned` 預計配 / `interacting` 互動中 / `leveling` 等待升級 / `ready` 準備完成 / `completed` 已完成 / `paused` 暫停 / `cancelled` 取消
@@ -224,16 +228,82 @@ dogId, fromAccountId, toAccountId, movedAt, notes
 
 配狗計畫建立時會存一份血緣檢查快照（`pedigreeStatus`／`pedigreeReason`／`pedigreeDistance`／`pedigreeCheckedAt`），純粹作為「當初建立時的紀錄」參考用；只要計畫還在進行中，畫面上實際顯示與是否允許操作，一律以即時重新檢查的結果為準。
 
-## 6. 純／混度計算（`js/utils/purityCalculator.js`）
+## 6. 下一代純種／混種預測（`js/utils/breedingPrediction.js`）
 
+全站唯一計算「下一代純種／混種與數值」的地方，`predictOffspring(parentA, parentB)` 是純函式（不寫入 Firestore、不操作 DOM），dogDetail.js、breeding.js、dashboard.js、pedigreeCheck.js、`breedingPlanService.js` 全部共用同一套。
 
+**SP2 配種規則**：
+- 純種 × 純種 → 下一代純種，`floor((父方純度 + 母方純度) / 2) + 1`
+- 混種 × 混種 → 下一代混種，`floor((父方混度 + 母方混度) / 2) + 1`
+- 純種 × 混種（不論順序）→ 下一代一律混種，**純種那一方計算時視為混度 0**，不能直接拿純度數值參與平均：`floor((0 + 對方混度) / 2) + 1`
 
+**目前系統實際使用的欄位**：狗狗文件只有一組欄位在用，沒有多種舊欄位名稱並存的情況：
+- `dog.dogType`：`"pure"` 或 `"mixed"`
+- `dog.purityMixDegree`：number（純種時代表純度，混種時代表混度，共用同一欄位）
+
+`predictOffspring()` 內部的 `normalizeParent()` 只認這兩個欄位；以後如果欄位名稱要調整，只需要改這一個函式，呼叫端完全不用動。
+
+**回傳格式**：
+
+成功時：
 ```js
-calculateOffspringPurityDegree(parentA, parentB)
-// = Math.floor((parentA + parentB) / 2) + 1
+{
+  valid: true,
+  offspringType: "pure" | "mixed",
+  offspringLevel: number,
+  offspringLevelLabel: "純度" | "混度",
+  displayLabel: "混種／混度 6",   // 直接可以顯示的文字
+  parents: {
+    parentA: { type, originalLevel, usedLevel },
+    parentB: { type, originalLevel, usedLevel }
+  }
+}
 ```
 
-配狗計畫預覽與新增子代流程都呼叫這個函式，不會把公式寫死在 UI 裡。
+失敗時（類型缺失／無法識別／數值缺失／數值為 NaN 或負數，一律不會默默當成 0）：
+```js
+{ valid: false, errorCode: "...", errorMessage: "中文錯誤說明" }
+```
+
+另外提供 `formatTypeLevel(type, level)`，把單一狗狗自己的類型與數值格式化成「混種／混度 10」這種清楚文字，畫面上不會再出現「純／混度」這種無法判斷類型的字眼。
+
+**測試**：`tests/breedingPrediction.test.js`（14 筆案例，涵蓋 6 種正常規則組合＋型別缺失／無法識別／NaN／負數／null 等異常情況，全數通過）。
+
+舊的 `js/utils/purityCalculator.js` 已標記為棄用（保留檔案避免意外破壞尚未發現的引用，但確認全站已經沒有任何地方呼叫它），不要在新程式碼中使用。
+
+---
+
+## 6.1 Service 層如何防止前端偽造預測結果（`breedingPlanService.js`）
+
+`createBreedingPlan()` 寫入 Firestore 前，會重新從 Firestore 載入 dogA、dogB「目前」的資料，重新呼叫 `predictOffspring()`。即使呼叫端在參數裡塞了 `offspringType`／`predictedPurity`／`prediction` 之類的欄位，一律忽略，只採用這裡重新算出來的結果。預測無效（型別缺失、數值缺失或無效）時直接 `throw` 中文錯誤，不會建立任何資料——這跟血緣防呆是同一層、同一個函式裡一起做的兩個獨立檢查（先檢查血緣，再檢查預測，兩者都通過才會真的寫入）。
+
+寫入的 Firestore 欄位：
+```js
+{
+  // 相容欄位：值來自這裡重新計算的結果，不是前端傳來的
+  predictedPurityMixDegree: number,
+
+  // 純種／混種預測快照，只作為「建立當下」的紀錄／顯示參考
+  prediction: {
+    offspringType: "pure" | "mixed",
+    offspringLevel: number,
+    calculation: {
+      parentAType: "pure" | "mixed",
+      parentAOriginalLevel: number,
+      parentAUsedLevel: number,
+      parentBType: "pure" | "mixed",
+      parentBOriginalLevel: number,
+      parentBUsedLevel: number
+    },
+    calculatedAt: "ISO timestamp"
+  },
+
+  // 血緣檢查快照（上一輪已完成，這次沒有更動格式）
+  pedigreeStatus, pedigreeReason, pedigreeDistance, pedigreeCheckedAt
+}
+```
+
+配狗中心（`breeding.js`）顯示時，會拿這個 `prediction` 快照當作「建立時預測」的歷史資訊，同時用目前兩隻狗的資料即時重新計算一次；如果兩者不同（代表父母資料在計畫建立後被修改過），會額外顯示「目前資料重新計算」的最新結果。沒有 `prediction` 快照的舊計畫（這次修改之前建立的），會直接用目前資料即時計算，算不出來就顯示「純種／混種資料不足，無法預測」，不會因此刪除舊計畫。
 
 ---
 
