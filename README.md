@@ -307,6 +307,28 @@ dogId, fromAccountId, toAccountId, movedAt, notes
 
 ---
 
+## 6.2 父母角色判定（`js/utils/parentRoleResolver.js`）與完成計畫的預測再驗證
+
+**問題背景**：配狗計畫的 `dogAId`／`dogBId` 只代表「配對的兩隻狗」，不代表誰是父親、誰是母親。使用者可能從母狗的詳情頁發起配對，這時候 `dogA` 反而是母狗。之前的程式碼在部分畫面直接假設 `dogA = 父方`、`dogB = 母方`，這是不正確的。
+
+**`resolveParentRoles(dogA, dogB)`**：全站唯一「依性別判定父親／母親」的地方，純函式，不寫 Firestore、不碰 DOM。系統的 `dog.gender` 欄位只會是 `"male"` 或 `"female"`。判定規則：
+- 兩隻狗剛好一公一母 → 回傳 `{ valid: true, father, mother }`
+- 兩隻都是公狗、都是母狗、任一隻缺少性別、其中一隻資料不存在、或兩隻是同一隻狗 → 回傳 `{ valid: false, errorCode, errorMessage }`，錯誤訊息是中文，可直接顯示
+
+**移除了哪些「dogA = 父方」的假設**：
+- `breeding.js` 的「新增子代」流程：按鈕點擊時先呼叫 `resolveParentRoles`，只有判定成功才會開啟新增子代表單；`fatherId`/`motherId` 一律用判定後的 `father.id`/`mother.id`，不再直接寫 `plan.dogAId`/`plan.dogBId`。判定失敗時按鈕本身就是 disabled 狀態（滑鼠移上去會顯示原因），就算被繞過點擊，click handler 也會再檢查一次並用 `alert` 顯示中文錯誤，不會開啟表單。
+- `dogDetail.js` 的「加入配狗計畫」預覽：顯示文字不再固定寫「父方」「母方」，只有依性別成功判定出一公一母時才顯示「父親」「母親」，否則顯示中性的「狗狗 A」「狗狗 B」。這裡只影響**顯示文字**，不影響能不能建立配狗計畫本身（配狗計畫允許任兩隻狗配對，血緣與純種／混種預測才是真正的建立條件；父母性別判定只在「要生子代」的那一刻才重要）。
+- `breedingPrediction.js` 內部的錯誤訊息標籤，原本寫死「父方」「母方」，改成中性的「狗狗 A」「狗狗 B」（`predictOffspring` 的 `parentA`/`parentB` 本來就只是計算用的兩個輸入位置，不代表真實親子關係）。
+- `dashboard.js`、`pedigreeCheck.js` 檢查後**沒有**發現固定標示父方/母方的文字（本來就是用狗狗名稱或中性的 `狗狗 A × 狗狗 B` 呈現），不需要修改。
+
+**完成配狗計畫時重新驗證預測**：`breedingPlanService.js` 的 `completeBreedingPlan()` 除了原本就有的血緣重新檢查，這次加上重新呼叫 `predictOffspring()`。兩項檢查合併判斷放在獨立的純函式 `canCompleteBreedingPlan(pedigreeResult, prediction)`（`js/utils/breedingPlanValidation.js`），只有血緣允許**且**預測有效才會真的標記完成；任一項不通過就 `throw` 中文錯誤，不會標記完成。完成成功時，會同步把最新的 `prediction` 快照（與 `predictedPurityMixDegree` 相容欄位）寫回 Firestore，不會沿用計畫建立當下的舊快照。
+
+**測試**：
+- `tests/parentRoleResolver.test.js`：8 筆案例（一公一母兩種順序、都公、都母、缺性別、都缺性別、狗不存在、同一隻狗）
+- `tests/breedingPlanValidation.test.js`：4 筆案例（血緣允許+預測有效才允許完成，其餘組合都阻止）
+
+---
+
 ## 7. 第一版尚未完成、留待後續的項目
 
 以下項目依照你提出的規格，第一版刻意先不做或只做骨架，避免過早引入未討論過的複雜度：
