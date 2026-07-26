@@ -43,7 +43,7 @@ export const MAX_SEARCH_DEPTH = PEDIGREE_RESTRICTED_GENERATIONS + 1;
 // 狀態顯示與分類（給 UI 與 service 層共用，避免各處重複判斷、避免顯示英文 enum）
 // ------------------------------
 
-/** 血緣檢查狀態的中文顯示文字 */
+/** 血緣檢查狀態的中文顯示文字（舊版簡短標籤，保留給尚未改用 getPedigreePermission 的地方使用） */
 export const PEDIGREE_STATUS_LABELS = {
   restricted: "三代內血緣限制，不可配",
   outside_restricted_generations: "已離開三代限制，可以配",
@@ -53,22 +53,133 @@ export const PEDIGREE_STATUS_LABELS = {
 };
 
 /**
- * 各狀態是否「預設允許建立配狗計畫」。
- * 遊戲規則：三代限制內禁止配狗；資料不足時，保守起見預設也不允許
- *（避免因為血緣資料不完整而誤配到限制內的對象），除非之後另外提供管理者強制建立功能。
- * 「已人工確認有血緣但距離未知」同樣保守處理為不允許，需要人工複核確認距離後才能配。
+ * 血緣權限的三種層級：
+ *   blocked  - 禁止：確認三代內有血緣，遊戲規則明確禁止配狗
+ *   warning  - 警告：不知道／無法完全確認，但「不知道」不代表「不能」，
+ *              允許繼續操作，只是關鍵動作（完成配狗、建立子代）需要人工確認
+ *   allowed  - 允許：血緣狀態明確沒有問題，全部正常
  */
-export const PEDIGREE_STATUS_ALLOWS_BREEDING = {
-  restricted: false,
-  outside_restricted_generations: true,
-  no_known_relation: true,
-  insufficient_data: false,
-  confirmed_related_unknown_distance: false
+export const PEDIGREE_LEVEL = {
+  BLOCKED: "blocked",
+  WARNING: "warning",
+  ALLOWED: "allowed"
 };
 
-/** 這個血緣檢查狀態是否允許建立配狗計畫 */
+/**
+ * 每個血緣檢查狀態對應的完整權限定義。
+ *
+ * 三種狀態的分類依據：
+ *   restricted                          -> blocked：已確認三代內有血緣，遊戲規則禁止
+ *   outside_restricted_generations       -> allowed：已離開三代限制，全部正常
+ *   no_known_relation                    -> allowed：查無關聯，全部正常
+ *   insufficient_data                    -> warning：祖先資料不足，「目前不知道」，不是「確認有血緣」
+ *   confirmed_related_unknown_distance    -> warning：確認有親屬但不知道距離是否超過三代
+ */
+const PEDIGREE_PERMISSIONS = {
+  restricted: {
+    level: PEDIGREE_LEVEL.BLOCKED,
+    canCreatePlan: false,
+    canEditPlan: false,
+    canSaveProgress: false,
+    canCompletePlan: false,
+    canCreateOffspring: false,
+    requiresConfirmation: false,
+    message: "三代內血緣限制，不可配",
+    color: "red"
+  },
+  outside_restricted_generations: {
+    level: PEDIGREE_LEVEL.ALLOWED,
+    canCreatePlan: true,
+    canEditPlan: true,
+    canSaveProgress: true,
+    canCompletePlan: true,
+    canCreateOffspring: true,
+    requiresConfirmation: false,
+    message: "已離開三代限制，可以配",
+    color: "green"
+  },
+  no_known_relation: {
+    level: PEDIGREE_LEVEL.ALLOWED,
+    canCreatePlan: true,
+    canEditPlan: true,
+    canSaveProgress: true,
+    canCompletePlan: true,
+    canCreateOffspring: true,
+    requiresConfirmation: false,
+    message: "查無已知血緣關聯，可以配",
+    color: "green"
+  },
+  insufficient_data: {
+    level: PEDIGREE_LEVEL.WARNING,
+    canCreatePlan: true,
+    canEditPlan: true,
+    canSaveProgress: true,
+    canCompletePlan: true,
+    canCreateOffspring: true,
+    requiresConfirmation: true,
+    message: "⚠ 血緣資料不足，目前無法確認是否存在三代內血緣。",
+    color: "yellow"
+  },
+  confirmed_related_unknown_distance: {
+    level: PEDIGREE_LEVEL.WARNING,
+    canCreatePlan: true,
+    canEditPlan: true,
+    canSaveProgress: true,
+    canCompletePlan: true,
+    canCreateOffspring: true,
+    requiresConfirmation: true,
+    message: "⚠ 已確認存在血緣關係，但目前無法判定是否超過限制代數。",
+    color: "orange"
+  }
+};
+
+/** 無法識別的狀態時的保守預設值（一律視為 blocked，避免未知狀態意外放行） */
+const FALLBACK_PEDIGREE_PERMISSION = {
+  level: PEDIGREE_LEVEL.BLOCKED,
+  canCreatePlan: false,
+  canEditPlan: false,
+  canSaveProgress: false,
+  canCompletePlan: false,
+  canCreateOffspring: false,
+  requiresConfirmation: false,
+  message: "無法識別的血緣狀態，請重新檢查",
+  color: "red"
+};
+
+/**
+ * 取得某個血緣檢查狀態的完整權限物件。
+ * 這是全站唯一判斷「這個血緣狀態可以做什麼」的地方，
+ * UI 與 Service 都應該呼叫這裡，不要自己各自判斷 true/false。
+ *
+ * @param {string} status - checkPedigreeCompatibility() 回傳的 status
+ * @returns {{
+ *   status: string,
+ *   level: "blocked"|"warning"|"allowed",
+ *   canCreatePlan: boolean,
+ *   canEditPlan: boolean,
+ *   canSaveProgress: boolean,
+ *   canCompletePlan: boolean,
+ *   canCreateOffspring: boolean,
+ *   requiresConfirmation: boolean,
+ *   message: string,
+ *   color: "green"|"yellow"|"orange"|"red"
+ * }}
+ */
+export function getPedigreePermission(status) {
+  const permission = PEDIGREE_PERMISSIONS[status] || FALLBACK_PEDIGREE_PERMISSION;
+  return { status, ...permission };
+}
+
+/**
+ * 這個血緣檢查狀態是否「完全允許」（不需要任何人工確認）。
+ * 只有 level === "allowed" 才會是 true；warning 與 blocked 都是 false。
+ *
+ * @deprecated 大部分情境請改用 getPedigreePermission()，可以拿到更完整的
+ *   warning / blocked 分級資訊。這個函式保留給只需要單純 true/false 判斷、
+ *   且不需要區分 warning 的地方使用（維持與舊版相同的行為）。
+ */
 export function isPedigreeStatusAllowed(status) {
-  return PEDIGREE_STATUS_ALLOWS_BREEDING[status] === true;
+  return getPedigreePermission(status).level === PEDIGREE_LEVEL.ALLOWED;
 }
 
 // ------------------------------
