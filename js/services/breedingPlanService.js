@@ -16,8 +16,8 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import {
   checkPedigreeCompatibility,
-  isPedigreeStatusAllowed,
-  PEDIGREE_STATUS_LABELS
+  getPedigreePermission,
+  PEDIGREE_LEVEL
 } from "../utils/pedigreeService.js";
 import { predictOffspring } from "../utils/breedingPrediction.js";
 import { canCompleteBreedingPlan } from "../utils/breedingPlanValidation.js";
@@ -97,9 +97,10 @@ export async function getPartnerIdsOf(dogId) {
  *
  * 重要（血緣防呆，第二道防線）：
  * 即使呼叫端（UI）已經檢查過血緣、甚至按鈕本身被繞過，這裡都會「重新」執行一次
- * 血緣檢查，只有 outside_restricted_generations / no_known_relation 這類允許配狗的
- * 狀態才會真的寫入 Firestore。restricted（三代內）與 insufficient_data（資料不足）
- * 一律擋下並拋出錯誤，不會建立任何資料。
+ * 血緣檢查。只有 blocked（restricted，已確認三代內有血緣）才會擋下、不寫入 Firestore。
+ * warning（insufficient_data 資料不足 / confirmed_related_unknown_distance 確認有親屬
+ * 但不知道距離）代表「目前不知道」，不等於「確認有血緣」，允許建立計畫（UI 端會在建立前
+ * 跳一次警示讓使用者確認，但這裡的 Service 層本身不會因為 warning 狀態擋下建立）。
  * 不要只依賴 UI 的按鈕 disabled，那只是第一道防線（避免使用者誤按），
  * 真正擋住不合法資料的關卡在這裡。
  *
@@ -109,14 +110,14 @@ export async function getPartnerIdsOf(dogId) {
  * predictedPurity / prediction 之類的欄位，一律忽略，只採用這裡重新計算的結果。
  * 如果兩隻狗的純種／混種資料不完整或無效，直接擋下，不會建立任何資料。
  *
- * @throws {Error} 當血緣檢查或純種／混種預測不允許配狗時，錯誤訊息為中文，可直接顯示給使用者
+ * @throws {Error} 當血緣狀態是 blocked，或純種／混種預測無效時，錯誤訊息為中文，可直接顯示給使用者
  */
 export async function createBreedingPlan(planData) {
   const pedigreeResult = await checkPedigreeCompatibility(planData.dogAId, planData.dogBId);
+  const pedigreePermission = getPedigreePermission(pedigreeResult.status);
 
-  if (!isPedigreeStatusAllowed(pedigreeResult.status)) {
-    const label = PEDIGREE_STATUS_LABELS[pedigreeResult.status] || pedigreeResult.status;
-    const error = new Error(`無法建立配狗計畫：${label}。${pedigreeResult.explanation}`);
+  if (pedigreePermission.level === PEDIGREE_LEVEL.BLOCKED) {
+    const error = new Error(`無法建立配狗計畫：${pedigreePermission.message}${pedigreeResult.explanation}`);
     error.pedigreeStatus = pedigreeResult.status;
     throw error;
   }
@@ -185,16 +186,31 @@ export async function updateBreedingPlan(id, partialData) {
 /**
  * 標記配狗計畫完成
  *
- * 血緣防呆（第二道防線）：即使計畫先前建立時是合法的，如果父母族譜後來有變化
- * 導致現在重新檢查變成不允許配狗的狀態，這裡會擋下「標記完成」這個動作。
+ * 血緣防呆（第二道防線，三層權限）：
+ *   - blocked（restricted）：永遠擋下，不管有沒有傳 confirmPedigreeWarning
+ *   - warning（insufficient_data / confirmed_related_unknown_distance）：
+ *     必須明確傳入 { confirmPedigreeWarning: true } 才會繼續往下走；
+ *     沒有傳的話會擋下並拋出「請再次確認後完成」的中文錯誤，讓 UI 端可以
+ *     跳出確認對話框，使用者確認後再用 confirmPedigreeWarning: true 重新呼叫一次。
+ *     這裡刻意不自己彈出確認視窗——Service 層不做 UI 互動，跳確認是 UI 的責任，
+ *     Service 只負責「沒有明確確認就不能通過」。
+ *   - allowed：直接繼續，不需要任何確認
  *
  * 純種／混種預測防呆（同樣不信任任何舊快照）：完成計畫前會重新從 Firestore
  * 載入 dogA、dogB「目前」的資料，重新呼叫 predictOffspring()。如果預測資料
  * 無效（型別缺失、數值缺失或無效），一樣擋下並拋出中文錯誤，不會標記完成。
- * 兩項檢查都通過後，才會真的標記完成，並同步把最新的 prediction 快照存回去
+ * 所有檢查都通過後，才會真的標記完成，並同步把最新的 prediction 快照存回去
  * （predictedPurityMixDegree 等相容欄位也一併更新，來源是同一個新計算結果）。
+ *
+ * @param {string} id
+ * @param {{confirmPedigreeWarning?: boolean}} options
+ * @throws {Error} 未通過檢查時拋出中文錯誤；err.needsConfirmation === true 代表
+ *   這是「warning 需要使用者確認」，而不是真的失敗，UI 可以依此決定要跳確認對話框
+ *   還是單純顯示錯誤。
  */
-export async function completeBreedingPlan(id) {
+export async function completeBreedingPlan(id, options = {}) {
+  const { confirmPedigreeWarning = false } = options;
+
   const plan = await getBreedingPlanById(id);
   if (!plan) throw new Error("找不到指定的配狗計畫");
 
@@ -205,9 +221,13 @@ export async function completeBreedingPlan(id) {
   ]);
   const prediction = predictOffspring(dogA, dogB);
 
-  const decision = canCompleteBreedingPlan(pedigreeResult, prediction);
+  const decision = canCompleteBreedingPlan(pedigreeResult, prediction, { confirmPedigreeWarning });
   if (!decision.allowed) {
-    throw new Error(`無法標記完成：${decision.reason}`);
+    const error = new Error(
+      decision.needsConfirmation ? decision.message : `無法標記完成：${decision.message}`
+    );
+    error.needsConfirmation = decision.needsConfirmation;
+    throw error;
   }
 
   const now = new Date().toISOString();
