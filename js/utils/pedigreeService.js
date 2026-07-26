@@ -40,6 +40,38 @@ export const PEDIGREE_RESTRICTED_GENERATIONS = 3;
 export const MAX_SEARCH_DEPTH = PEDIGREE_RESTRICTED_GENERATIONS + 1;
 
 // ------------------------------
+// 狀態顯示與分類（給 UI 與 service 層共用，避免各處重複判斷、避免顯示英文 enum）
+// ------------------------------
+
+/** 血緣檢查狀態的中文顯示文字 */
+export const PEDIGREE_STATUS_LABELS = {
+  restricted: "三代內血緣限制，不可配",
+  outside_restricted_generations: "已離開三代限制，可以配",
+  no_known_relation: "查無已知血緣關聯，可以配",
+  insufficient_data: "族譜資料不足，無法判定",
+  confirmed_related_unknown_distance: "已人工確認有血緣，距離未知，需人工複核"
+};
+
+/**
+ * 各狀態是否「預設允許建立配狗計畫」。
+ * 遊戲規則：三代限制內禁止配狗；資料不足時，保守起見預設也不允許
+ *（避免因為血緣資料不完整而誤配到限制內的對象），除非之後另外提供管理者強制建立功能。
+ * 「已人工確認有血緣但距離未知」同樣保守處理為不允許，需要人工複核確認距離後才能配。
+ */
+export const PEDIGREE_STATUS_ALLOWS_BREEDING = {
+  restricted: false,
+  outside_restricted_generations: true,
+  no_known_relation: true,
+  insufficient_data: false,
+  confirmed_related_unknown_distance: false
+};
+
+/** 這個血緣檢查狀態是否允許建立配狗計畫 */
+export function isPedigreeStatusAllowed(status) {
+  return PEDIGREE_STATUS_ALLOWS_BREEDING[status] === true;
+}
+
+// ------------------------------
 // 內部工具：統一存取「狗」或「外部血統節點」
 // ------------------------------
 
