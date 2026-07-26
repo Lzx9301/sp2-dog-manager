@@ -245,6 +245,42 @@ textarea {
   margin-bottom: 10px;
 }
 
+/* 血緣「warning」等級的提示橫幅：黃色＝資料不足，橘色＝已確認血緣但距離未知 */
+.pedigree-warning-banner {
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 10px;
+  border: 1px solid transparent;
+}
+
+.pedigree-warning-banner-yellow {
+  background: #fdf3d9;
+  color: #8a6d1a;
+  border-color: #e8cf7a;
+}
+
+.pedigree-warning-banner-orange {
+  background: #fbe6d4;
+  color: var(--color-warning);
+  border-color: #eec091;
+}
+
+.pedigree-warning-note {
+  font-size: 12px;
+  font-weight: 700;
+  margin-top: 4px;
+}
+
+.pedigree-warning-note-yellow {
+  color: #8a6d1a;
+}
+
+.pedigree-warning-note-orange {
+  color: var(--color-warning);
+}
+
 /* ---------- 標籤 chip（紀念標籤輸入用） ---------- */
 
 .tag-chip {
