@@ -20,6 +20,7 @@ import { getAllEffects, MAX_EFFECTS_PER_DOG } from "../services/effectService.js
 import { getAllPatterns } from "../services/patternService.js";
 import { checkPedigreeCompatibility, isPedigreeStatusAllowed, PEDIGREE_STATUS_LABELS } from "../utils/pedigreeService.js";
 import { predictOffspring, formatTypeLevel } from "../utils/breedingPrediction.js";
+import { resolveParentRoles } from "../utils/parentRoleResolver.js";
 
 await requireLogin();
 renderNav("breeding.html");
@@ -71,6 +72,11 @@ async function renderPlanCard(plan, listEl) {
   const [dogA, dogB] = await Promise.all([getDogById(plan.dogAId), getDogById(plan.dogBId)]);
 
   const canAddOffspring = plan.status === BREEDING_PLAN_STATUS.COMPLETED && !plan.offspringCreated;
+
+  // 父母角色判定：dogA / dogB 只是「配對的兩隻狗」，不代表誰是父親、誰是母親
+  // （使用者可能從母狗詳情頁發起配對，這時候 dogA 反而是母狗）。
+  // 只有在需要新增子代時才需要判定角色，判定失敗就不能開啟新增子代表單。
+  const parentRoles = canAddOffspring ? resolveParentRoles(dogA, dogB) : null;
 
   // 血緣狀態即時重新檢查（不相信舊快照）：
   // 已完成／已取消的計畫是歷史紀錄，不需要（也不應該）重新檢查而動搖既有結果；
@@ -154,7 +160,11 @@ async function renderPlanCard(plan, listEl) {
           .map(([value, label]) => `<option value="${value}" ${plan.status === value ? "selected" : ""}>${label}</option>`)
           .join("")}
       </select>
-      ${canAddOffspring ? `<button class="btn btn-primary btn-small plan-add-offspring-btn">新增子代</button>` : ""}
+      ${
+        canAddOffspring
+          ? `<button class="btn btn-primary btn-small plan-add-offspring-btn" ${parentRoles.valid ? "" : "disabled"} title="${parentRoles.valid ? "" : parentRoles.errorMessage}">新增子代</button>`
+          : ""
+      }
       ${
         isInvalid
           ? `
@@ -193,7 +203,14 @@ async function renderPlanCard(plan, listEl) {
 
   const offspringBtn = card.querySelector(".plan-add-offspring-btn");
   if (offspringBtn) {
-    offspringBtn.addEventListener("click", () => openAddOffspringModal(plan, dogA, dogB));
+    offspringBtn.addEventListener("click", () => {
+      // 防禦性再檢查一次（即使按鈕理論上已經是 disabled，避免萬一被繞過）
+      if (!parentRoles || !parentRoles.valid) {
+        alert((parentRoles && parentRoles.errorMessage) || "無法建立子代：此配狗計畫必須包含一隻公狗與一隻母狗。");
+        return;
+      }
+      openAddOffspringModal(plan, parentRoles.father, parentRoles.mother);
+    });
   }
 
   const cancelBtn = card.querySelector(".plan-cancel-btn");
@@ -217,7 +234,7 @@ async function renderPlanCard(plan, listEl) {
   }
 }
 
-function openAddOffspringModal(plan, dogA, dogB) {
+function openAddOffspringModal(plan, father, mother) {
   const accountOptions = accounts.map((a) => `<option value="${a.id}">${a.accountName}</option>`).join("");
   const breedOptions = breeds.map((b) => `<option value="${b.id}">${b.name}</option>`).join("");
   const effectCheckboxes = effects
@@ -226,12 +243,14 @@ function openAddOffspringModal(plan, dogA, dogB) {
   const patternOptions = patterns.map((p) => `<option value="${p.id}">${p.canonicalName}</option>`).join("");
   const today = new Date().toISOString().slice(0, 10);
 
-  // 用「目前」兩隻狗的資料重新計算一次預測（不要相信計畫建立當下的舊快照），
+  // 用「目前」父母的資料重新計算一次預測（不要相信計畫建立當下的舊快照），
   // 這樣即使父母資料在配狗計畫建立後有被修改過，新增子代時也會用最新資料計算。
-  const prediction = predictOffspring(dogA, dogB);
+  // 注意：father/mother 已經由 resolveParentRoles() 依性別正確判定，
+  // 不再假設 plan.dogAId = 父方。
+  const prediction = predictOffspring(father, mother);
   const predictionInfoHtml = prediction.valid
-    ? `父：${dogA ? dogA.name : "未知"}　母：${dogB ? dogB.name : "未知"}<br/>自動帶入：${prediction.displayLabel}`
-    : `父：${dogA ? dogA.name : "未知"}　母：${dogB ? dogB.name : "未知"}<br/><span style="color:var(--color-danger);">⚠ ${prediction.errorMessage}</span>`;
+    ? `父：${father.name}　母：${mother.name}<br/>自動帶入：${prediction.displayLabel}`
+    : `父：${father.name}　母：${mother.name}<br/><span style="color:var(--color-danger);">⚠ ${prediction.errorMessage}</span>`;
 
   const { close, el } = openModal({
     title: "新增子代",
@@ -334,8 +353,8 @@ function openAddOffspringModal(plan, dogA, dogB) {
             birthDate: modalEl.querySelector("#o-birthdate").value || today,
             memorialTags: tagController.getSelectedTags(),
             notes: modalEl.querySelector("#o-notes").value.trim(),
-            fatherId: plan.dogAId,
-            motherId: plan.dogBId
+            fatherId: father.id,
+            motherId: mother.id
           });
 
           await updateBreedingPlan(plan.id, { offspringCreated: true });

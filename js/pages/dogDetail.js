@@ -30,6 +30,7 @@ import {
 import { moveDogToAccount, getMovementLogsOfDog } from "../services/movementLogService.js";
 import { checkPedigreeCompatibility, wouldCreateCycle, isPedigreeStatusAllowed, PEDIGREE_STATUS_LABELS } from "../utils/pedigreeService.js";
 import { predictOffspring, formatTypeLevel } from "../utils/breedingPrediction.js";
+import { resolveParentRoles } from "../utils/parentRoleResolver.js";
 import { GENDER_LABELS, DOG_TYPE_LABELS, SOURCE_TYPE_LABELS } from "../utils/constants.js";
 
 await requireLogin();
@@ -470,7 +471,8 @@ function openAddBreedingModal() {
         const pedigreeAllowed = isPedigreeStatusAllowed(pedigreeResult.status);
         const pedigreeStatusLabel = PEDIGREE_STATUS_LABELS[pedigreeResult.status] || pedigreeResult.status;
 
-        // 父方＝目前這隻狗，母方＝所選的配對對象（與 breedingPlanService 的 dogAId/dogBId 對應一致）
+        // 注意：predictOffspring 的 parentA/parentB 只是計算用的兩個輸入位置，
+        // 不代表誰是父親、誰是母親（真正的父母角色判定在下面用 resolveParentRoles）
         const prediction = predictOffspring(dog, partner);
 
         const genderWarning =
@@ -478,9 +480,16 @@ function openAddBreedingModal() {
             ? `<div style="color:var(--color-warning);">⚠ 兩隻狗性別相同，請確認是否正確</div>`
             : "";
 
+        // 父方／母方是不正確的假設：dogA/dogB 只是「配對的兩隻狗」，
+        // 使用者可能從母狗詳情頁發起配對，這時候「這隻狗」反而是母狗。
+        // 只有依性別成功判定出一公一母，才顯示「父親」「母親」，否則用中性的「狗狗 A」「狗狗 B」。
+        const roles = resolveParentRoles(dog, partner);
+        const selfLabel = roles.valid ? (roles.father.id === dog.id ? "父親" : "母親") : "狗狗 A";
+        const partnerLabel = roles.valid ? (roles.father.id === partner.id ? "父親" : "母親") : "狗狗 B";
+
         const predictionHtml = prediction.valid
           ? `
-            <div class="dog-meta" style="margin-top:4px;">計算使用：父方 ${prediction.parents.parentA.usedLevel}、母方 ${prediction.parents.parentB.usedLevel}</div>
+            <div class="dog-meta" style="margin-top:4px;">計算使用：${selfLabel} ${prediction.parents.parentA.usedLevel}、${partnerLabel} ${prediction.parents.parentB.usedLevel}</div>
             <div style="margin-top:2px;"><strong>預計下一代：</strong>${prediction.displayLabel}</div>
           `
           : `<div style="color:var(--color-danger); font-weight:700; margin-top:4px;">⚠ ${prediction.errorMessage}</div>`;
@@ -495,8 +504,8 @@ function openAddBreedingModal() {
           <div class="dog-meta">${pedigreeResult.explanation}</div>
 
           <div style="margin-top:8px;">
-            <div><strong>父方：</strong>${dog.name}　${formatTypeLevel(dog.dogType, dog.purityMixDegree)}</div>
-            <div><strong>母方：</strong>${partner.name}　${formatTypeLevel(partner.dogType, partner.purityMixDegree)}</div>
+            <div><strong>${selfLabel}：</strong>${dog.name}　${formatTypeLevel(dog.dogType, dog.purityMixDegree)}</div>
+            <div><strong>${partnerLabel}：</strong>${partner.name}　${formatTypeLevel(partner.dogType, partner.purityMixDegree)}</div>
           </div>
           ${predictionHtml}
           ${genderWarning}
