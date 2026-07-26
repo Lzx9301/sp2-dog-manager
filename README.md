@@ -201,7 +201,32 @@ dogId, fromAccountId, toAccountId, movedAt, notes
 
 ---
 
+## 5.2 配狗血緣防呆（兩層防護）
+
+遊戲規則明確禁止「三代限制內」配狗，所以配狗計畫的建立與後續操作有兩層防呆，**不只依賴 UI 按鈕禁用**：
+
+**第一層：UI 防呆**（`dogDetail.js` 的「加入配狗計畫」預覽）
+- 選定配對對象後即時顯示血緣檢查結果的中文說明（`PEDIGREE_STATUS_LABELS`）
+- 只有 `outside_restricted_generations`（已離開三代限制）與 `no_known_relation`（查無關聯）才會啟用「建立配狗計畫」按鈕
+- `restricted`（三代內）與 `insufficient_data`（資料不足）一律禁用按鈕，並顯示紅字說明原因，不能提交
+
+**第二層：Service 層強制驗證**（`breedingPlanService.js` 的 `createBreedingPlan` / `completeBreedingPlan`）
+- `createBreedingPlan` 在真正寫入 Firestore 之前，會**重新**呼叫一次 `checkPedigreeCompatibility`，不信任呼叫端傳來的任何血緣資訊。只有允許的狀態才會建立文件，否則直接 `throw` 中文錯誤訊息，Firestore 不會新增任何資料。
+- `completeBreedingPlan`（標記完成）也會重新檢查一次血緣狀態，避免「建立當下合法、但父母族譜後來變更導致現在其實不合法」的計畫被標記完成。
+- 這一層即使 UI 被繞過（例如直接呼叫 API、或未來換一個前端）也一樣會擋下不合法的資料。
+
+`isPedigreeStatusAllowed(status)` 是這兩層共用的判斷依據（定義在 `pedigreeService.js`），只有 `outside_restricted_generations`、`no_known_relation` 回傳 `true`；`restricted`、`insufficient_data`、`confirmed_related_unknown_distance` 一律 `false`，寫死在同一個地方，UI 與 Service 不會各自判斷出不一致的結果。這組分類邏輯也寫了測試（見 `tests/pedigreeService.test.js`）。
+
+**既有的 restricted 舊配狗計畫怎麼處理**：不會自動刪除或修改。配狗中心（`breeding.html`）與工作台（`index.html`）每次載入時，都會對「進行中」的計畫（預計配／互動中／等待升級／準備完成／暫停）即時重新檢查一次血緣狀態（不相信建立當下存的舊快照）：
+- 工作台：血緣狀態不允許的計畫直接從「待互動」「待練等」「準備完成」等區塊隱藏，不會出現在正常工作台畫面。
+- 配狗中心：血緣狀態不允許的計畫會顯示醒目的紅色「⚠ 無效配狗計畫」橫幅，互動進度輸入框、等級目標、「儲存進度」按鈕、狀態下拉選單全部禁用，改為顯示「取消計畫」與「刪除測試資料」兩個按鈕，讓你可以選擇保留紀錄（取消）或直接清掉（刪除），不會被卡住也不會被系統自動處理掉。
+- 已經是「已完成」或「已取消」狀態的計畫視為歷史紀錄，不會被重新檢查或動搖（避免already-產生的子代資料受到影響）。
+
+配狗計畫建立時會存一份血緣檢查快照（`pedigreeStatus`／`pedigreeReason`／`pedigreeDistance`／`pedigreeCheckedAt`），純粹作為「當初建立時的紀錄」參考用；只要計畫還在進行中，畫面上實際顯示與是否允許操作，一律以即時重新檢查的結果為準。
+
 ## 6. 純／混度計算（`js/utils/purityCalculator.js`）
+
+
 
 ```js
 calculateOffspringPurityDegree(parentA, parentB)
