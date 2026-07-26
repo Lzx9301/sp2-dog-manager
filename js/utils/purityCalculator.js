@@ -1,18 +1,19 @@
 // ==================================================
-// 純／混度計算 utility
+// 純／混度計算 utility（已棄用，請勿再使用）
 // ==================================================
-// 核心規則（請勿寫死在 UI，一律透過這個函式計算）：
+// ⚠ 這個檔案的公式沒有區分純種／混種配對規則，
+// 純種 × 混種時會錯誤地直接拿純度數值參與平均，不符合遊戲實際規則。
 //
-//   下一代純／混度 = floor((父方純／混度 + 母方純／混度) / 2) + 1
+// 全站唯一正確的下一代純種／混種預測函式在：
+//   js/utils/breedingPrediction.js（predictOffspring）
 //
-// 之後如果遊戲規則有調整，只需要修改這個檔案，
-// 所有呼叫端（配狗計畫預覽、新增子代流程）都會自動套用新規則。
+// 這個檔案保留只是避免刪除後意外造成尚未發現的舊引用出錯，
+// 目前系統中已經沒有任何地方呼叫這裡的函式了（dogDetail.js、breeding.js、
+// dashboard.js、pedigreeCheck.js、breedingPlanService.js 都已改用
+// breedingPrediction.js 的 predictOffspring）。請不要在新程式碼中使用這個檔案。
 
 /**
- * 計算子代預計純／混度
- * @param {number} parentAPurityMixDegree - 父方（或母方）純／混度
- * @param {number} parentBPurityMixDegree - 母方（或父方）純／混度
- * @returns {number} 計算後的子代純／混度（整數）
+ * @deprecated 請改用 js/utils/breedingPrediction.js 的 predictOffspring()
  */
 export function calculateOffspringPurityDegree(parentAPurityMixDegree, parentBPurityMixDegree) {
   const a = Number(parentAPurityMixDegree);
