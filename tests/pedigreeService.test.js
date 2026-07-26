@@ -15,6 +15,7 @@ import {
   checkPedigreeCompatibilityCore,
   wouldCreateCycleCore,
   isPedigreeStatusAllowed,
+  getPedigreePermission,
   PEDIGREE_RESTRICTED_GENERATIONS
 } from "../js/utils/pedigreeService.js";
 
@@ -284,3 +285,101 @@ function runAllowStatusTests() {
 }
 
 runAllowStatusTests();
+
+// --------------------------------------------------
+// getPedigreePermission 測試（血緣權限三層級：blocked / warning / allowed）
+// --------------------------------------------------
+const permissionTestCases = [
+  {
+    name: "1. restricted -> blocked",
+    status: "restricted",
+    expectedLevel: "blocked",
+    expectedColor: "red"
+  },
+  {
+    name: "2. outside_restricted_generations -> allowed",
+    status: "outside_restricted_generations",
+    expectedLevel: "allowed",
+    expectedColor: "green"
+  },
+  {
+    name: "3. no_known_relation -> allowed",
+    status: "no_known_relation",
+    expectedLevel: "allowed",
+    expectedColor: "green"
+  },
+  {
+    name: "4. insufficient_data -> warning（黃色）",
+    status: "insufficient_data",
+    expectedLevel: "warning",
+    expectedColor: "yellow"
+  },
+  {
+    name: "5. confirmed_related_unknown_distance -> warning（橘色）",
+    status: "confirmed_related_unknown_distance",
+    expectedLevel: "warning",
+    expectedColor: "orange"
+  }
+];
+
+function runPermissionTests() {
+  console.log("\n--- getPedigreePermission 測試 ---");
+  let passed = 0;
+  let failed = 0;
+
+  for (const testCase of permissionTestCases) {
+    const permission = getPedigreePermission(testCase.status);
+    const ok = permission.level === testCase.expectedLevel && permission.color === testCase.expectedColor;
+
+    if (ok) {
+      console.log(`✅ ${testCase.name}`);
+      passed++;
+    } else {
+      console.log(`❌ ${testCase.name}`);
+      console.log(`   實際回傳:`, JSON.stringify(permission));
+      failed++;
+    }
+  }
+
+  // warning 狀態必須允許保留計畫/編輯/保存進度（只有關鍵動作需要確認）
+  const warningPermission = getPedigreePermission("insufficient_data");
+  const warningChecksOk =
+    warningPermission.canCreatePlan === true &&
+    warningPermission.canEditPlan === true &&
+    warningPermission.canSaveProgress === true &&
+    warningPermission.canCompletePlan === true &&
+    warningPermission.canCreateOffspring === true &&
+    warningPermission.requiresConfirmation === true;
+
+  if (warningChecksOk) {
+    console.log("✅ warning 狀態允許保留計畫/編輯/保存進度，但 requiresConfirmation 為 true");
+    passed++;
+  } else {
+    console.log("❌ warning 狀態的權限欄位不符預期");
+    console.log("   實際回傳:", JSON.stringify(warningPermission));
+    failed++;
+  }
+
+  // blocked 狀態必須全部禁止
+  const blockedPermission = getPedigreePermission("restricted");
+  const blockedChecksOk =
+    blockedPermission.canCreatePlan === false &&
+    blockedPermission.canEditPlan === false &&
+    blockedPermission.canSaveProgress === false &&
+    blockedPermission.canCompletePlan === false &&
+    blockedPermission.canCreateOffspring === false;
+
+  if (blockedChecksOk) {
+    console.log("✅ blocked 狀態全部禁止");
+    passed++;
+  } else {
+    console.log("❌ blocked 狀態的權限欄位不符預期");
+    console.log("   實際回傳:", JSON.stringify(blockedPermission));
+    failed++;
+  }
+
+  const total = permissionTestCases.length + 2;
+  console.log(`\n共 ${total} 筆測試，通過 ${passed}，失敗 ${failed}`);
+}
+
+runPermissionTests();
