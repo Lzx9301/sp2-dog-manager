@@ -205,28 +205,70 @@ dogId, fromAccountId, toAccountId, movedAt, notes
 
 ---
 
-## 5.2 配狗血緣防呆（兩層防護）
+## 5.2 血緣權限系統（`getPedigreePermission`）—— blocked / warning / allowed 三層
 
-遊戲規則明確禁止「三代限制內」配狗，所以配狗計畫的建立與後續操作有兩層防呆，**不只依賴 UI 按鈕禁用**：
+**這一輪的核心修正**：血緣狀態不是只有「允許」「不允許」兩種。原本 `insufficient_data`（族譜資料不足）與 `confirmed_related_unknown_distance`（已確認有親屬但不知道距離）都被當成跟 `restricted` 一樣的「無效配狗計畫」，導致 Dashboard 隱藏、配狗中心標紅、無法完成、無法新增子代——但「不知道」不代表「不能」，這樣太嚴格了。
 
-**第一層：UI 防呆**（`dogDetail.js` 的「加入配狗計畫」預覽）
-- 選定配對對象後即時顯示血緣檢查結果的中文說明（`PEDIGREE_STATUS_LABELS`）
-- 只有 `outside_restricted_generations`（已離開三代限制）與 `no_known_relation`（查無關聯）才會啟用「建立配狗計畫」按鈕
-- `restricted`（三代內）與 `insufficient_data`（資料不足）一律禁用按鈕，並顯示紅字說明原因，不能提交
+`getPedigreePermission(status)`（`js/utils/pedigreeService.js`）是全站唯一判斷「這個血緣狀態可以做什麼」的地方，回傳：
 
-**第二層：Service 層強制驗證**（`breedingPlanService.js` 的 `createBreedingPlan` / `completeBreedingPlan`）
-- `createBreedingPlan` 在真正寫入 Firestore 之前，會**重新**呼叫一次 `checkPedigreeCompatibility`，不信任呼叫端傳來的任何血緣資訊。只有允許的狀態才會建立文件，否則直接 `throw` 中文錯誤訊息，Firestore 不會新增任何資料。
-- `completeBreedingPlan`（標記完成）也會重新檢查一次血緣狀態，避免「建立當下合法、但父母族譜後來變更導致現在其實不合法」的計畫被標記完成。
-- 這一層即使 UI 被繞過（例如直接呼叫 API、或未來換一個前端）也一樣會擋下不合法的資料。
+```js
+{
+  status,
+  level: "blocked" | "warning" | "allowed",
+  canCreatePlan, canEditPlan, canSaveProgress, canCompletePlan, canCreateOffspring, // boolean
+  requiresConfirmation: boolean,
+  message: "中文說明文字",
+  color: "green" | "yellow" | "orange" | "red"
+}
+```
 
-`isPedigreeStatusAllowed(status)` 是這兩層共用的判斷依據（定義在 `pedigreeService.js`），只有 `outside_restricted_generations`、`no_known_relation` 回傳 `true`；`restricted`、`insufficient_data`、`confirmed_related_unknown_distance` 一律 `false`，寫死在同一個地方，UI 與 Service 不會各自判斷出不一致的結果。這組分類邏輯也寫了測試（見 `tests/pedigreeService.test.js`）。
+五種狀態的分級：
 
-**既有的 restricted 舊配狗計畫怎麼處理**：不會自動刪除或修改。配狗中心（`breeding.html`）與工作台（`index.html`）每次載入時，都會對「進行中」的計畫（預計配／互動中／等待升級／準備完成／暫停）即時重新檢查一次血緣狀態（不相信建立當下存的舊快照）：
-- 工作台：血緣狀態不允許的計畫直接從「待互動」「待練等」「準備完成」等區塊隱藏，不會出現在正常工作台畫面。
-- 配狗中心：血緣狀態不允許的計畫會顯示醒目的紅色「⚠ 無效配狗計畫」橫幅，互動進度輸入框、等級目標、「儲存進度」按鈕、狀態下拉選單全部禁用，改為顯示「取消計畫」與「刪除測試資料」兩個按鈕，讓你可以選擇保留紀錄（取消）或直接清掉（刪除），不會被卡住也不會被系統自動處理掉。
-- 已經是「已完成」或「已取消」狀態的計畫視為歷史紀錄，不會被重新檢查或動搖（避免already-產生的子代資料受到影響）。
+| 狀態 | level | color | 說明 |
+|---|---|---|---|
+| `restricted` | blocked | red | 已確認三代內有血緣，遊戲規則明確禁止，永遠禁止建立計畫／完成／新增子代 |
+| `outside_restricted_generations` | allowed | green | 已離開三代限制，全部正常 |
+| `no_known_relation` | allowed | green | 查無關聯，全部正常 |
+| `insufficient_data` | warning | yellow | 祖先資料不足，「目前不知道」，不等於「確認有血緣」 |
+| `confirmed_related_unknown_distance` | warning | orange | 確認有親屬但不知道距離是否超過三代 |
 
-配狗計畫建立時會存一份血緣檢查快照（`pedigreeStatus`／`pedigreeReason`／`pedigreeDistance`／`pedigreeCheckedAt`），純粹作為「當初建立時的紀錄」參考用；只要計畫還在進行中，畫面上實際顯示與是否允許操作，一律以即時重新檢查的結果為準。
+`isPedigreeStatusAllowed(status)` 保留（`getPedigreePermission(status).level === "allowed"`），行為跟舊版完全一致，避免破壞尚未升級的呼叫端；但新程式碼請一律改用 `getPedigreePermission`，可以拿到 warning／blocked 的完整分級資訊。
+
+**warning 如何流到 UI**：`warning` 狀態下 `canCreatePlan`／`canEditPlan`／`canSaveProgress`／`canCompletePlan`／`canCreateOffspring` 全部是 `true`（可以繼續操作），只有 `requiresConfirmation: true`——代表「完成配狗」「新增子代」這兩個關鍵動作需要跳一次確認對話框，其餘操作（保存進度、編輯、計畫本身的存在）完全不受影響，卡片也不會變灰、不會被當成無效計畫。
+
+**畫面顏色對應**：
+- **黃色**（`insufficient_data`）：配狗中心的黃色警示橫幅（`.pedigree-warning-banner-yellow`）、工作台卡片的黃色小提示（`.pedigree-warning-note-yellow`）、`dogDetail.js` 預覽的黃色狀態文字
+- **橘色**（`confirmed_related_unknown_distance`）：同上，class 換成 `-orange`，`dogDetail.js` 用 `var(--color-warning)`
+- **紅色**（`restricted`，即 blocked）：沿用原本的 `.invalid-plan-banner`，唯一會整張卡標紅、禁用所有操作的狀態
+
+**血緣防呆現在分兩層**（延續上一輪的「不只依賴 UI」原則，只是判斷邏輯從二元改成三層）：
+
+**第一層：UI 防呆**
+- `dogDetail.js`「加入配狗計畫」：只有 `blocked`（restricted）才會禁用「建立配狗計畫」按鈕；`warning` 不禁用，但按鈕文字會提示「需確認血緣警示」，點擊時先跳 `confirmModal` 讓使用者確認，取消就不繼續
+- `breeding.js` 配狗中心：`blocked` 才會整張卡標紅（`.invalid-plan-banner`）、禁用互動進度／等級目標輸入框／儲存進度／狀態下拉，並提供「取消計畫」「刪除測試資料」兩個按鈕；`warning` 只顯示黃／橘色橫幅，其餘操作完全不受影響。「完成」計畫（狀態下拉選到已完成）與「新增子代」按鈕都會依 `warning`／`blocked` 分別跳確認或禁用
+- `dashboard.js`：只有 `blocked` 的計畫會從「待互動／待練等／準備完成」隱藏；`warning` 的計畫正常顯示，額外附上一行黃／橘色小提示文字
+
+**第二層：Service 層強制驗證，且不會自己跳確認**
+- `createBreedingPlan`（`breedingPlanService.js`）：重新呼叫 `checkPedigreeCompatibility`，只有 `blocked` 才會擋下、`throw` 中文錯誤；`warning` 允許建立（UI 端已經在建立前跳過一次確認，Service 這裡不重複要求）
+- `completeBreedingPlan(id, { confirmPedigreeWarning })`（`breedingPlanService.js`）：這是這一輪修改的重點。流程是：
+  1. 重新抓 dogA、dogB 最新資料
+  2. 重新呼叫 `checkPedigreeCompatibility`
+  3. 重新呼叫 `predictOffspring`
+  4. 三者交給純函式 `canCompleteBreedingPlan(pedigreeResult, prediction, { confirmPedigreeWarning })`（`breedingPlanValidation.js`）判斷：
+     - `blocked` → 直接拒絕，`confirmPedigreeWarning` 是 `true` 也沒用
+     - `warning` 且沒有傳 `confirmPedigreeWarning: true` → 拒絕，錯誤訊息是「請再次確認後完成」，並在 `Error` 物件上標記 `err.needsConfirmation = true`
+     - `warning` 且有傳 `confirmPedigreeWarning: true`，或 `allowed` → 繼續檢查 `prediction.valid`，無效一樣拒絕
+     - 都通過才真的標記完成，並同步更新最新的 `prediction`／`pedigreeStatus` 等快照
+
+  **Service 本身不會跳出確認視窗**——它只負責「沒有明確的 `confirmPedigreeWarning: true` 就不能通過 warning」，讓 UI（`breeding.js` 的 `attemptCompleteBreedingPlan()`）攔截 `err.needsConfirmation`，跳一次 `confirmModal(err.message)`，使用者確認後才用 `{ confirmPedigreeWarning: true }` 重新呼叫一次。這樣即使有人繞過 UI 直接呼叫 `completeBreedingPlan(id)`，沒有明確帶上確認旗標，一樣會被擋下，不會被自動放行。
+
+**既有 restricted 舊計畫怎麼處理**：跟上一輪一樣，不會自動刪除或修改，只在配狗中心顯示紅色無效橫幅並提供取消／刪除操作。
+
+**測試**：
+- `tests/pedigreeService.test.js` 新增 7 筆 `getPedigreePermission` 測試（5 種狀態分級 + warning 允許操作 + blocked 全部禁止）
+- `tests/breedingPlanValidation.test.js` 重寫為 9 筆案例，涵蓋 blocked／warning 未確認／warning 已確認／allowed 各種組合
+
+---
 
 ## 6. 下一代純種／混種預測（`js/utils/breedingPrediction.js`）
 
