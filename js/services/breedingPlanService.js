@@ -12,7 +12,8 @@ import {
   updateDoc,
   deleteDoc,
   query,
-  where
+  where,
+  arrayUnion
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import {
   checkPedigreeCompatibility,
@@ -167,7 +168,7 @@ export async function createBreedingPlan(planData) {
     pedigreeDistance: pedigreeResult.distance,
     pedigreeCheckedAt: now,
     notes: planData.notes || "",
-    offspringCreated: false,
+    offspringIds: [],
     createdAt: now,
     updatedAt: now,
     completedAt: null
@@ -253,6 +254,15 @@ export async function completeBreedingPlan(id, options = {}) {
     pedigreeReason: pedigreeResult.explanation,
     pedigreeDistance: pedigreeResult.distance,
     pedigreeCheckedAt: now
+  });
+}
+
+/** 將新建立的子代加入計畫；arrayUnion 不會覆蓋既有 offspringIds。 */
+export async function addOffspringToBreedingPlan(id, dogId) {
+  if (!id || !dogId) throw new Error("缺少配狗計畫或子代 ID");
+  await updateDoc(doc(db, COLLECTION_NAME, id), {
+    offspringIds: arrayUnion(dogId),
+    updatedAt: new Date().toISOString()
   });
 }
 
