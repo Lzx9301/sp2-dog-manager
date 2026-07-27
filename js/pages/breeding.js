@@ -16,8 +16,8 @@ import {
 } from "../services/breedingPlanService.js";
 import {
   getDogById,
+  getAllDogs,
   createDog,
-  getChildrenByParents,
   getDistinctSeriesList,
   getDistinctMemorialTags
 } from "../services/dogService.js";
@@ -40,15 +40,17 @@ let effects = [];
 let patterns = [];
 let seriesList = [];
 let memorialTags = [];
+let allDogs = [];
 
 async function loadReferenceData() {
-  [accounts, breeds, effects, patterns, seriesList, memorialTags] = await Promise.all([
+  [accounts, breeds, effects, patterns, seriesList, memorialTags, allDogs] = await Promise.all([
     getActiveAccounts(),
     getActiveBreeds(),
     getAllEffects(),
     getAllPatterns(),
     getDistinctSeriesList(),
-    getDistinctMemorialTags()
+    getDistinctMemorialTags(),
+    getAllDogs()
   ]);
 }
 
@@ -89,12 +91,21 @@ function renderPlanList() {
     return;
   }
 
-  filtered.forEach((plan) => renderPlanCard(plan, listEl));
+  filtered.forEach((plan) => {
+    renderPlanCard(plan, listEl).catch((err) => {
+      console.error(`配狗計畫 ${plan.id} 載入失敗：`, err);
+      const failedCard = listEl.querySelector(`[data-plan-id="${plan.id}"]`);
+      if (failedCard) {
+        failedCard.innerHTML = `<div class="invalid-plan-banner">⚠ 此計畫載入失敗，請重新整理或檢查資料。</div>`;
+      }
+    });
+  });
 }
 
 async function renderPlanCard(plan, listEl) {
   const card = document.createElement("div");
   card.className = "card";
+  card.dataset.planId = plan.id;
   listEl.appendChild(card);
 
   const [dogA, dogB] = await Promise.all([getDogById(plan.dogAId), getDogById(plan.dogBId)]);
@@ -107,8 +118,14 @@ async function renderPlanCard(plan, listEl) {
 
   // 舊版第一次建立子代只把 offspringCreated 設為 true，沒有保存 dogId。
   // 因此以正確父母組合反查共同子代，與新版 offspringIds 合併；找回後順便回填陣列。
+  // 不在每張卡片額外發 Firestore 查詢；直接使用頁面已載入的狗狗資料比對。
+  // 這可避免單一查詢失敗時讓整張卡片停止渲染，也減少大量重複讀取。
   const legacyOffspringDogs = parentRoles?.valid
-    ? await getChildrenByParents(parentRoles.father.id, parentRoles.mother.id)
+    ? allDogs.filter(
+        (dog) =>
+          dog.fatherId === parentRoles.father.id &&
+          dog.motherId === parentRoles.mother.id
+      )
     : [];
   const offspringIds = mergeOffspringIds(recordedOffspringIds, legacyOffspringDogs);
   const offspringDogs = (await Promise.all(offspringIds.map((id) => getDogById(id)))).filter(Boolean);
@@ -458,6 +475,7 @@ function openAddOffspringModal(plan, father, mother) {
           });
 
           await addOffspringToBreedingPlan(plan.id, newDog.id);
+          allDogs.push(newDog);
           close();
           await loadPlans();
         } catch (err) {
