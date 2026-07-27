@@ -14,7 +14,13 @@ import {
   BREEDING_PLAN_STATUS,
   BREEDING_PLAN_STATUS_LABELS
 } from "../services/breedingPlanService.js";
-import { getDogById, createDog, getDistinctSeriesList, getDistinctMemorialTags } from "../services/dogService.js";
+import {
+  getDogById,
+  createDog,
+  getChildrenByParents,
+  getDistinctSeriesList,
+  getDistinctMemorialTags
+} from "../services/dogService.js";
 import { getActiveAccounts } from "../services/accountService.js";
 import { getActiveBreeds } from "../services/breedService.js";
 import { getAllEffects, MAX_EFFECTS_PER_DOG } from "../services/effectService.js";
@@ -22,7 +28,7 @@ import { getAllPatterns } from "../services/patternService.js";
 import { checkPedigreeCompatibility, getPedigreePermission, PEDIGREE_LEVEL } from "../utils/pedigreeService.js";
 import { predictOffspring, formatTypeLevel } from "../utils/breedingPrediction.js";
 import { resolveParentRoles } from "../utils/parentRoleResolver.js";
-import { getOffspringIds, canShowAddOffspring } from "../utils/offspringPlan.js";
+import { getOffspringIds, mergeOffspringIds, canShowAddOffspring } from "../utils/offspringPlan.js";
 
 await requireLogin();
 renderNav("breeding.html");
@@ -93,12 +99,25 @@ async function renderPlanCard(plan, listEl) {
 
   const [dogA, dogB] = await Promise.all([getDogById(plan.dogAId), getDogById(plan.dogBId)]);
 
-  const offspringIds = getOffspringIds(plan);
-  const offspringDogs = (await Promise.all(offspringIds.map((id) => getDogById(id)))).filter(Boolean);
+  const recordedOffspringIds = getOffspringIds(plan);
 
   // 已完成計畫無論已有幾隻子代，都重新判定父母、血緣與預測；子代數量不參與按鈕顯示條件。
   const isCompletedPlan = plan.status === BREEDING_PLAN_STATUS.COMPLETED;
   const parentRoles = isCompletedPlan ? resolveParentRoles(dogA, dogB) : null;
+
+  // 舊版第一次建立子代只把 offspringCreated 設為 true，沒有保存 dogId。
+  // 因此以正確父母組合反查共同子代，與新版 offspringIds 合併；找回後順便回填陣列。
+  const legacyOffspringDogs = parentRoles?.valid
+    ? await getChildrenByParents(parentRoles.father.id, parentRoles.mother.id)
+    : [];
+  const offspringIds = mergeOffspringIds(recordedOffspringIds, legacyOffspringDogs);
+  const offspringDogs = (await Promise.all(offspringIds.map((id) => getDogById(id)))).filter(Boolean);
+  const recoveredIds = offspringIds.filter((id) => !recordedOffspringIds.includes(id));
+  if (recoveredIds.length > 0) {
+    Promise.all(recoveredIds.map((id) => addOffspringToBreedingPlan(plan.id, id))).catch((err) => {
+      console.warn("舊子代已顯示，但回填 offspringIds 失敗：", err);
+    });
+  }
 
   let offspringPedigreePermission = null;
   if (isCompletedPlan) {
