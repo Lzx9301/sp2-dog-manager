@@ -10,6 +10,7 @@ import {
   updateBreedingPlan,
   completeBreedingPlan,
   deleteBreedingPlan,
+  addOffspringToBreedingPlan,
   BREEDING_PLAN_STATUS,
   BREEDING_PLAN_STATUS_LABELS
 } from "../services/breedingPlanService.js";
@@ -21,6 +22,7 @@ import { getAllPatterns } from "../services/patternService.js";
 import { checkPedigreeCompatibility, getPedigreePermission, PEDIGREE_LEVEL } from "../utils/pedigreeService.js";
 import { predictOffspring, formatTypeLevel } from "../utils/breedingPrediction.js";
 import { resolveParentRoles } from "../utils/parentRoleResolver.js";
+import { getOffspringIds, canShowAddOffspring } from "../utils/offspringPlan.js";
 
 await requireLogin();
 renderNav("breeding.html");
@@ -91,17 +93,15 @@ async function renderPlanCard(plan, listEl) {
 
   const [dogA, dogB] = await Promise.all([getDogById(plan.dogAId), getDogById(plan.dogBId)]);
 
-  const canAddOffspring = plan.status === BREEDING_PLAN_STATUS.COMPLETED && !plan.offspringCreated;
+  const offspringIds = getOffspringIds(plan);
+  const offspringDogs = (await Promise.all(offspringIds.map((id) => getDogById(id)))).filter(Boolean);
 
-  // 父母角色判定：dogA / dogB 只是「配對的兩隻狗」，不代表誰是父親、誰是母親
-  // （使用者可能從母狗詳情頁發起配對，這時候 dogA 反而是母狗）。
-  // 只有在需要新增子代時才需要判定角色，判定失敗就不能開啟新增子代表單。
-  const parentRoles = canAddOffspring ? resolveParentRoles(dogA, dogB) : null;
+  // 已完成計畫無論已有幾隻子代，都重新判定父母、血緣與預測；子代數量不參與按鈕顯示條件。
+  const isCompletedPlan = plan.status === BREEDING_PLAN_STATUS.COMPLETED;
+  const parentRoles = isCompletedPlan ? resolveParentRoles(dogA, dogB) : null;
 
-  // 新增子代是「進行中」以外的動作（計畫已完成才會出現），但族譜仍可能在完成後又變動，
-  // 所以這裡額外即時檢查一次血緣狀態，不沿用上面 isHistorical 略過檢查的邏輯。
   let offspringPedigreePermission = null;
-  if (canAddOffspring) {
+  if (isCompletedPlan) {
     const offspringPedigreeResult = await checkPedigreeCompatibility(plan.dogAId, plan.dogBId);
     offspringPedigreePermission = getPedigreePermission(offspringPedigreeResult.status);
   }
@@ -146,6 +146,12 @@ async function renderPlanCard(plan, listEl) {
   // - 如果是舊資料、沒有 prediction 快照，直接用目前資料即時計算，不會顯示 NaN，
   //   算不出來就顯示「純種／混種資料不足，無法預測」，不會刪除這筆舊計畫。
   const livePrediction = predictOffspring(dogA, dogB);
+  const canAddOffspring = canShowAddOffspring({
+    status: plan.status,
+    pedigreeLevel: offspringPedigreePermission?.level,
+    parentRolesValid: parentRoles?.valid,
+    predictionValid: livePrediction.valid
+  });
   let predictionHtml;
   if (plan.prediction && plan.prediction.offspringType) {
     const snapshotLabel = formatTypeLevel(plan.prediction.offspringType, plan.prediction.offspringLevel);
@@ -194,7 +200,20 @@ async function renderPlanCard(plan, listEl) {
       ${predictionHtml}
     </div>
 
+    ${
+      offspringIds.length > 0
+        ? `<div class="dog-meta" style="margin-top:10px;">已建立子代：${offspringIds.length} 隻${
+            offspringDogs.length > 0 ? `<br/>${offspringDogs.map((dog) => dog.name).join("、")}` : ""
+          }</div>`
+        : ""
+    }
+
     <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+      ${
+        offspringIds.length > 0
+          ? `<button class="btn btn-secondary btn-small plan-view-offspring-btn">查看子代</button>`
+          : ""
+      }
       <button class="btn btn-secondary btn-small plan-save-btn" ${isBlocked ? "disabled" : ""}>儲存進度</button>
       <select class="plan-status-select" ${isBlocked ? "disabled" : ""}>
         ${Object.entries(BREEDING_PLAN_STATUS_LABELS)
@@ -203,15 +222,7 @@ async function renderPlanCard(plan, listEl) {
       </select>
       ${
         canAddOffspring
-          ? `<button class="btn btn-primary btn-small plan-add-offspring-btn" ${
-              !parentRoles.valid || offspringPedigreePermission.level === PEDIGREE_LEVEL.BLOCKED ? "disabled" : ""
-            } title="${
-              !parentRoles.valid
-                ? parentRoles.errorMessage
-                : offspringPedigreePermission.level === PEDIGREE_LEVEL.BLOCKED
-                  ? offspringPedigreePermission.message
-                  : ""
-            }">新增子代</button>`
+          ? `<button class="btn btn-primary btn-small plan-add-offspring-btn">新增子代</button>`
           : ""
       }
       ${
@@ -249,6 +260,16 @@ async function renderPlanCard(plan, listEl) {
     }
     await loadPlans();
   });
+
+  const viewOffspringBtn = card.querySelector(".plan-view-offspring-btn");
+  if (viewOffspringBtn) {
+    viewOffspringBtn.addEventListener("click", () => {
+      const names = offspringDogs.length > 0
+        ? offspringDogs.map((dog) => dog.name).join("、")
+        : offspringIds.join("、");
+      alert(`已建立子代：${offspringIds.length} 隻\n${names}`);
+    });
+  }
 
   const offspringBtn = card.querySelector(".plan-add-offspring-btn");
   if (offspringBtn) {
@@ -396,7 +417,7 @@ function openAddOffspringModal(plan, father, mother) {
         }
 
         try {
-          await createDog({
+          const newDog = await createDog({
             name,
             series: modalEl.querySelector("#o-series").value.trim() || null,
             accountId: modalEl.querySelector("#o-account").value || null,
@@ -413,10 +434,11 @@ function openAddOffspringModal(plan, father, mother) {
             memorialTags: tagController.getSelectedTags(),
             notes: modalEl.querySelector("#o-notes").value.trim(),
             fatherId: father.id,
-            motherId: mother.id
+            motherId: mother.id,
+            sourceBreedingPlanId: plan.id
           });
 
-          await updateBreedingPlan(plan.id, { offspringCreated: true });
+          await addOffspringToBreedingPlan(plan.id, newDog.id);
           close();
           await loadPlans();
         } catch (err) {
