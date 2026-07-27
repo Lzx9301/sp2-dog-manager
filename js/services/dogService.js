@@ -56,6 +56,19 @@ export async function getChildrenOf(dogId) {
 }
 
 /**
+ * 依一組父母取得兩者共同子代。
+ * 先查父方所有子代再以前端過濾 motherId，避免 Firestore 複合索引需求。
+ * 用於相容舊版：舊版建立子代時只寫 offspringCreated，沒有保存 offspringId。
+ */
+export async function getChildrenByParents(fatherId, motherId) {
+  if (!fatherId || !motherId) return [];
+  const snap = await getDocs(query(collection(db, COLLECTION_NAME), where("fatherId", "==", fatherId)));
+  return snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((dog) => dog.motherId === motherId);
+}
+
+/**
  * 新增狗狗
  * @param {object} dogData - 不含 id / createdAt / updatedAt，這裡自動處理
  */
