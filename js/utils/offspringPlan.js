@@ -31,3 +31,12 @@ export function appendOffspringId(existingIds, dogId) {
   if (dogId && !result.includes(dogId)) result.push(dogId);
   return result;
 }
+
+/** 合併計畫已記錄 ID 與從父母關係找回的舊子代，並去除重複。 */
+export function mergeOffspringIds(recordedIds = [], recoveredDogs = []) {
+  const ids = new Set((recordedIds || []).filter(Boolean));
+  (recoveredDogs || []).forEach((dog) => {
+    if (dog?.id) ids.add(dog.id);
+  });
+  return Array.from(ids);
+}
