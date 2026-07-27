@@ -1,4 +1,4 @@
-import { canShowAddOffspring, appendOffspringId, getOffspringIds } from "../js/utils/offspringPlan.js";
+import { canShowAddOffspring, appendOffspringId, getOffspringIds, mergeOffspringIds } from "../js/utils/offspringPlan.js";
 
 const cases = [
   ["1. completed + 空陣列仍顯示", { status:"completed", pedigreeLevel:"allowed", parentRolesValid:true, predictionValid:true }, true],
@@ -24,5 +24,14 @@ else { console.log("❌ 4. offspringIds 累加失敗", accumulated); failed++; }
 const legacy = getOffspringIds({ offspringId:"OLD1", offspringIds:["NEW1"] });
 if (legacy.length === 2 && legacy.includes("OLD1") && legacy.includes("NEW1")) console.log("✅ 舊 offspringId 可相容顯示");
 else { console.log("❌ 舊欄位相容失敗", legacy); failed++; }
+
+
+const recovered = mergeOffspringIds(["NEW2"], [{ id:"OLD1" }, { id:"NEW2" }]);
+if (recovered.length === 2 && recovered.includes("OLD1") && recovered.includes("NEW2")) {
+  console.log("✅ 舊版未保存 ID 的第一隻子代可由父母關係合併找回");
+} else {
+  console.log("❌ 舊子代合併找回失敗", recovered);
+  failed++;
+}
 
 if (failed) process.exitCode = 1;
