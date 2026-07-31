@@ -9,6 +9,7 @@ import { buildParentOptionsHtml, attachAddExternalNodeButton, attachGenderMismat
 import {
   searchDogs,
   createDog,
+  updateDog,
   getAllDogs,
   getDistinctSeriesList,
   getDistinctMemorialTags
@@ -19,6 +20,7 @@ import { getAllEffects, MAX_EFFECTS_PER_DOG } from "../services/effectService.js
 import { getAllPatterns } from "../services/patternService.js";
 import { getAllExternalNodes } from "../services/externalPedigreeService.js";
 import { GENDER_LABELS, DOG_TYPE_LABELS, SOURCE_TYPE_LABELS } from "../utils/constants.js";
+import { isMouthPattern, formatMouthDogLabel, isValidMouthSourceBreedId } from "../utils/mouthType.js";
 
 await requireLogin();
 renderNav("dogs.html");
@@ -96,6 +98,26 @@ function breedName(breedId) {
   return found ? found.name : "（未設定品種）";
 }
 
+function patternById(patternId) {
+  return patterns.find((p) => p.id === patternId) || null;
+}
+
+/**
+ * 計算狗狗的「外觀顯示文字」。
+ * 如果是嘴狗（混種 + 圖案為嘴），顯示「熊嘴薩摩」這種組合文字；
+ * 沒有嘴型來源就顯示「未設定嘴型的嘴薩摩」。
+ * 不是嘴狗就回傳 null，交給呼叫端用原本的方式顯示（品種／圖案名稱）。
+ */
+function mouthDogDisplayLabel(dog) {
+  if (dog.dogType !== "mixed") return null;
+  const pattern = patternById(dog.patternId);
+  if (!isMouthPattern(pattern)) return null;
+
+  const selfBreedName = breeds.find((b) => b.id === dog.breedId)?.name || null;
+  const mouthSourceBreedName = breeds.find((b) => b.id === dog.mouthSourceBreedId)?.name || null;
+  return formatMouthDogLabel(selfBreedName, mouthSourceBreedName);
+}
+
 function renderDogList(dogs) {
   const listEl = document.getElementById("dog-list");
   listEl.innerHTML = "";
@@ -106,6 +128,7 @@ function renderDogList(dogs) {
   }
 
   dogs.forEach((dog) => {
+    const mouthLabel = mouthDogDisplayLabel(dog);
     const card = document.createElement("div");
     card.className = "card dog-card";
     card.innerHTML = `
@@ -116,7 +139,7 @@ function renderDogList(dogs) {
         <span class="tag">${DOG_TYPE_LABELS[dog.dogType] || dog.dogType || "未設定"}</span>
       </div>
       <div class="dog-meta" style="margin-top:6px;">
-        品種：${breedName(dog.breedId)}<br/>
+        ${mouthLabel ? `外觀：${mouthLabel}<br/>` : `品種：${breedName(dog.breedId)}<br/>`}
         帳號：${accountName(dog.accountId)}<br/>
         等級：Lv.${dog.level ?? "-"}　純／混度：${dog.purityMixDegree ?? "-"}
       </div>
@@ -204,6 +227,11 @@ function openAddDogModal() {
       <div class="form-group" id="f-mixed-pattern-group" style="display:none;">
         <label>圖案（混種）</label>
         <select id="f-pattern"><option value="">（未設定）</option>${patternOptionsHtml()}</select>
+      </div>
+
+      <div class="form-group" id="f-mouth-source-group" style="display:none;">
+        <label>嘴型來源／這是什麼嘴</label>
+        <select id="f-mouth-source"><option value="">（請選擇）</option>${breedOptionsHtml()}</select>
       </div>
 
       <div class="form-row">
@@ -299,6 +327,19 @@ function openAddDogModal() {
       const dogTypeSelect = modalEl.querySelector("#f-dogtype");
       const effectsGroup = modalEl.querySelector("#f-pure-effects-group");
       const patternGroup = modalEl.querySelector("#f-mixed-pattern-group");
+      const patternSelect = modalEl.querySelector("#f-pattern");
+      const mouthSourceGroup = modalEl.querySelector("#f-mouth-source-group");
+
+      function syncMouthSourceVisibility() {
+        const isMixed = dogTypeSelect.value === "mixed";
+        const selectedPattern = patternById(patternSelect.value);
+        const showMouthField = isMixed && isMouthPattern(selectedPattern);
+        mouthSourceGroup.style.display = showMouthField ? "block" : "none";
+        if (!showMouthField) {
+          modalEl.querySelector("#f-mouth-source").value = "";
+        }
+      }
+
       dogTypeSelect.addEventListener("change", () => {
         if (dogTypeSelect.value === "pure") {
           effectsGroup.style.display = "block";
@@ -307,7 +348,9 @@ function openAddDogModal() {
           effectsGroup.style.display = "none";
           patternGroup.style.display = "block";
         }
+        syncMouthSourceVisibility();
       });
+      patternSelect.addEventListener("change", syncMouthSourceVisibility);
 
       // 父母欄位：新增外部血統節點按鈕 + 性別不符警告
       const fatherSelect = modalEl.querySelector("#f-father");
@@ -339,6 +382,18 @@ function openAddDogModal() {
           return;
         }
 
+        // 嘴型驗證：圖案是嘴的話，一定要選嘴型來源品種，且必須是允許清單裡的品種
+        const selectedPatternId = dogType === "mixed" ? modalEl.querySelector("#f-pattern").value || null : null;
+        const selectedPattern = patternById(selectedPatternId);
+        const isMouthDog = dogType === "mixed" && isMouthPattern(selectedPattern);
+        const mouthSourceBreedId = modalEl.querySelector("#f-mouth-source").value || null;
+        const validBreedIds = breeds.map((b) => b.id);
+
+        if (isMouthDog && !isValidMouthSourceBreedId(mouthSourceBreedId, validBreedIds)) {
+          errorEl.textContent = "這是嘴圖案，請選擇嘴型來源品種";
+          return;
+        }
+
         const dogData = {
           name,
           series: modalEl.querySelector("#f-series").value.trim() || null,
@@ -347,7 +402,8 @@ function openAddDogModal() {
           gender: modalEl.querySelector("#f-gender").value,
           dogType,
           effects: dogType === "pure" ? selectedEffectIds : [],
-          patternId: dogType === "mixed" ? modalEl.querySelector("#f-pattern").value || null : null,
+          patternId: selectedPatternId,
+          mouthSourceBreedId: isMouthDog ? mouthSourceBreedId : null,
           purityMixDegree: Number(modalEl.querySelector("#f-purity").value) || 0,
           level: Number(modalEl.querySelector("#f-level").value) || 1,
           sourceType: modalEl.querySelector("#f-source-type").value,
@@ -374,9 +430,82 @@ function openAddDogModal() {
   });
 }
 
+// ---------- 待補嘴型清單 ----------
+
+/** 找出「圖案是嘴，但 mouthSourceBreedId 缺失」的狗 */
+function findDogsMissingMouthSource() {
+  return allDogs.filter((dog) => {
+    if (dog.dogType !== "mixed") return false;
+    const pattern = patternById(dog.patternId);
+    if (!isMouthPattern(pattern)) return false;
+    return !dog.mouthSourceBreedId;
+  });
+}
+
+function openPendingMouthModal() {
+  const missingDogs = findDogsMissingMouthSource();
+
+  const { close, el } = openModal({
+    title: `待補嘴型清單（${missingDogs.length}）`,
+    contentHtml: `
+      <div id="pending-mouth-list"></div>
+    `,
+    onMount: (modalEl) => {
+      renderPendingMouthList(modalEl.querySelector("#pending-mouth-list"), missingDogs);
+    }
+  });
+}
+
+function renderPendingMouthList(container, missingDogs) {
+  if (missingDogs.length === 0) {
+    container.innerHTML = `<div class="empty-state">目前沒有待補嘴型的狗</div>`;
+    return;
+  }
+
+  container.innerHTML = missingDogs
+    .map(
+      (dog) => `
+      <div style="padding:8px 0; border-bottom:1px solid var(--color-border);" data-dog-row="${dog.id}">
+        <div><strong>${dog.name}</strong>　自身品種：${breedName(dog.breedId)}　帳號：${accountName(dog.accountId)}</div>
+        <div style="display:flex; gap:6px; margin-top:6px; align-items:center;">
+          <select class="pending-mouth-select" data-dog-id="${dog.id}"><option value="">（選擇嘴型來源）</option>${breedOptionsHtml()}</select>
+          <button class="btn btn-primary btn-small pending-mouth-save-btn" data-dog-id="${dog.id}">快速設定</button>
+        </div>
+      </div>
+    `
+    )
+    .join("");
+
+  container.querySelectorAll(".pending-mouth-save-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const dogId = btn.dataset.dogId;
+      const select = container.querySelector(`.pending-mouth-select[data-dog-id="${dogId}"]`);
+      const mouthSourceBreedId = select.value;
+      const validBreedIds = breeds.map((b) => b.id);
+
+      if (!isValidMouthSourceBreedId(mouthSourceBreedId, validBreedIds)) {
+        alert("請選擇嘴型來源品種");
+        return;
+      }
+
+      try {
+        await updateDog(dogId, { mouthSourceBreedId });
+        await loadReferenceData();
+        const remaining = findDogsMissingMouthSource();
+        renderPendingMouthList(container, remaining);
+        await refreshDogList();
+      } catch (err) {
+        alert("設定失敗，請稍後再試");
+        console.error(err);
+      }
+    });
+  });
+}
+
 // ---------- 事件綁定 ----------
 
 document.getElementById("add-dog-btn").addEventListener("click", openAddDogModal);
+document.getElementById("pending-mouth-btn").addEventListener("click", openPendingMouthModal);
 document.getElementById("search-input").addEventListener("input", debounce(refreshDogList, 250));
 ["filter-account", "filter-breed", "filter-gender", "filter-dogtype", "filter-series", "filter-memorial-tag"].forEach(
   (id) => document.getElementById(id).addEventListener("change", refreshDogList)

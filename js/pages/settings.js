@@ -154,9 +154,12 @@ async function loadPatterns() {
     row.style.cssText = "padding:8px 0; border-bottom:1px solid var(--color-border);";
     row.innerHTML = `
       <div style="display:flex; align-items:center; gap:8px;">
-        <strong style="flex:1;">${pattern.canonicalName}</strong>
+        <strong style="flex:1;">${pattern.canonicalName} ${
+          pattern.isMouthPattern ? '<span class="tag" style="background:#fdf3d9; color:#8a6d1a;">嘴圖案</span>' : ""
+        }</strong>
         <button class="btn btn-secondary btn-small" data-action="rename">改名</button>
         <button class="btn btn-secondary btn-small" data-action="add-alias">新增別名</button>
+        <button class="btn btn-secondary btn-small" data-action="toggle-mouth">${pattern.isMouthPattern ? "取消嘴圖案標記" : "設為嘴圖案"}</button>
         <button class="btn btn-danger btn-small" data-action="delete">刪除</button>
       </div>
       <div class="dog-meta">別名：${(pattern.aliases || []).join("、") || "（無）"}</div>
@@ -173,6 +176,17 @@ async function loadPatterns() {
       const alias = prompt("輸入要合併的別名：");
       if (alias && alias.trim()) {
         await addAliasToPattern(pattern.id, alias.trim());
+        await loadPatterns();
+      }
+    });
+    row.querySelector('[data-action="toggle-mouth"]').addEventListener("click", async () => {
+      const willBeMouth = !pattern.isMouthPattern;
+      const message = willBeMouth
+        ? `將「${pattern.canonicalName}」標記為嘴圖案後，新增／編輯狗狗選到這個圖案時會要求填寫嘴型來源品種。確定嗎？`
+        : `取消「${pattern.canonicalName}」的嘴圖案標記嗎？已經填過嘴型來源的狗狗資料不會被刪除，只是之後不會再要求填寫。`;
+      const confirmed = await confirmModal(message);
+      if (confirmed) {
+        await updatePattern(pattern.id, { isMouthPattern: willBeMouth });
         await loadPatterns();
       }
     });

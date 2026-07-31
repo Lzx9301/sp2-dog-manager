@@ -32,6 +32,7 @@ import { checkPedigreeCompatibility, wouldCreateCycle, getPedigreePermission, PE
 import { predictOffspring, formatTypeLevel } from "../utils/breedingPrediction.js";
 import { resolveParentRoles } from "../utils/parentRoleResolver.js";
 import { GENDER_LABELS, DOG_TYPE_LABELS, SOURCE_TYPE_LABELS } from "../utils/constants.js";
+import { isMouthPattern, formatMouthDogLabel, isValidMouthSourceBreedId } from "../utils/mouthType.js";
 
 await requireLogin();
 renderNav("dogs.html");
@@ -112,13 +113,71 @@ async function renderAppearanceSection() {
     `;
   } else if (dog.dogType === "mixed") {
     const pattern = dog.patternId ? await getPatternById(dog.patternId) : null;
-    el.innerHTML = `
-      <div><strong>類型：</strong>${DOG_TYPE_LABELS.mixed}</div>
-      <div><strong>圖案：</strong>${pattern ? pattern.canonicalName : "（未設定）"}</div>
-    `;
+
+    if (isMouthPattern(pattern)) {
+      const selfBreed = await getBreedById(dog.breedId);
+      const mouthSourceBreed = dog.mouthSourceBreedId ? await getBreedById(dog.mouthSourceBreedId) : null;
+      const mouthLabel = formatMouthDogLabel(selfBreed?.name || null, mouthSourceBreed?.name || null);
+
+      el.innerHTML = `
+        <div><strong>類型：</strong>${DOG_TYPE_LABELS.mixed}</div>
+        <div><strong>圖案：</strong>${pattern.canonicalName}</div>
+        <div><strong>外觀：</strong>${mouthLabel || "（缺少自身品種，無法顯示）"}</div>
+        <button class="btn btn-secondary btn-small" id="edit-mouth-source-btn" style="margin-top:6px;">
+          ${dog.mouthSourceBreedId ? "編輯嘴型" : "設定嘴型"}
+        </button>
+      `;
+      document.getElementById("edit-mouth-source-btn").addEventListener("click", openMouthSourceModal);
+    } else {
+      el.innerHTML = `
+        <div><strong>類型：</strong>${DOG_TYPE_LABELS.mixed}</div>
+        <div><strong>圖案：</strong>${pattern ? pattern.canonicalName : "（未設定）"}</div>
+      `;
+    }
   } else {
     el.innerHTML = `<div>尚未設定純種／混種</div>`;
   }
+}
+
+/** 快速設定／編輯嘴型來源品種（不動 dogType／patternId，只改 mouthSourceBreedId） */
+function openMouthSourceModal() {
+  const breedOptions = breeds.map((b) => `<option value="${b.id}" ${b.id === dog.mouthSourceBreedId ? "selected" : ""}>${b.name}</option>`).join("");
+
+  const { close, el } = openModal({
+    title: "設定嘴型來源",
+    contentHtml: `
+      <div class="form-group">
+        <label>嘴型來源／這是什麼嘴</label>
+        <select id="m-mouth-source"><option value="">${dog.mouthSourceBreedId ? "（清空）" : "尚未設定"}</option>${breedOptions}</select>
+      </div>
+      <div id="m-mouth-error" style="color:#b3543f; font-size:13px;"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" data-action="cancel">取消</button>
+        <button type="button" class="btn btn-primary" data-action="save">儲存</button>
+      </div>
+    `,
+    onMount: (modalEl, close) => {
+      modalEl.querySelector('[data-action="cancel"]').addEventListener("click", close);
+      modalEl.querySelector('[data-action="save"]').addEventListener("click", async () => {
+        const value = modalEl.querySelector("#m-mouth-source").value || null;
+        const validBreedIds = breeds.map((b) => b.id);
+
+        if (value && !isValidMouthSourceBreedId(value, validBreedIds)) {
+          modalEl.querySelector("#m-mouth-error").textContent = "請選擇有效的嘴型來源品種";
+          return;
+        }
+
+        try {
+          await updateDog(dogId, { mouthSourceBreedId: value });
+          close();
+          await renderAppearanceSection();
+        } catch (err) {
+          modalEl.querySelector("#m-mouth-error").textContent = "儲存失敗，請稍後再試";
+          console.error(err);
+        }
+      });
+    }
+  });
 }
 
 // ---------- 來源 ----------
