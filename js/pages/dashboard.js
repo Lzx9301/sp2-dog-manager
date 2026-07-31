@@ -83,18 +83,22 @@ async function loadDashboard() {
     .sort((a, b) => new Date(b.completedAt || 0) - new Date(a.completedAt || 0))
     .slice(0, 6);
 
-  // 已完成但還沒新增子代：completed 狀態，且「實際子代清單」為空。
-  // 重要：不能只看 offspringCreated 這個舊版布林欄位——同一個已完成計畫現在可以
-  // 建立多隻子代，offspringIds 才是主要依據；且必須沿用跟 breeding.js 完全相同的
-  // 舊資料恢復邏輯（resolveEffectiveOffspringIds），否則舊計畫（只有 offspringCreated=true、
-  // 沒存過 dogId）會被誤判成「還沒有子代」而重複出現在這個區塊。
+  // 已完成但還沒新增子代：completed 狀態，且「沒有任何已確認過建立過子代的跡象」。
+  // 重要（這一輪修正）：
+  //   - 不能只看 offspringCreated 這個舊版布林欄位，但也不能完全忽略它——
+  //     offspringCreated === true 代表「舊資料顯示已經建立過子代」，即使目前
+  //     找不到明確的 dogId，也不該讓這種計畫又跑回「尚未新增子代」區塊。
+  //   - 只靠 fatherId/motherId 反查到的 legacyCandidateIds **不算已確認子代**
+  //     （同一對父母可能有其他配狗計畫，無法證明歸屬），所以判斷時完全不採計
+  //     legacyCandidateIds.length，只看 ids（明確歸屬）跟 offspringCreated 旗標。
   const allDogs = await getAllDogs();
   const pendingOffspringPlans = [];
   for (const plan of plans.filter((p) => p.status === BREEDING_PLAN_STATUS.COMPLETED)) {
     const [dogA, dogB] = await Promise.all([getDogById(plan.dogAId), getDogById(plan.dogBId)]);
     const parentRoles = resolveParentRoles(dogA, dogB);
-    const { ids: effectiveOffspringIds } = resolveEffectiveOffspringIds(plan, parentRoles, allDogs);
-    if (effectiveOffspringIds.length === 0) {
+    const result = resolveEffectiveOffspringIds(plan, parentRoles, allDogs);
+    const hasConfirmedOffspring = result.ids.length > 0 || plan.offspringCreated === true;
+    if (!hasConfirmedOffspring) {
       pendingOffspringPlans.push(plan);
     }
   }

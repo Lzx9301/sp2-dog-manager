@@ -114,17 +114,22 @@ async function renderPlanCard(plan, listEl) {
   const isCompletedPlan = plan.status === BREEDING_PLAN_STATUS.COMPLETED;
   const parentRoles = isCompletedPlan ? resolveParentRoles(dogA, dogB) : null;
 
-  // 舊版第一次建立子代只把 offspringCreated 設為 true，沒有保存 dogId。
-  // resolveEffectiveOffspringIds 會依優先順序（sourceBreedingPlanId → offspringIds → 父母反查）
-  // 判斷這個計畫實際的子代清單；父母反查只有唯一候選時才會建議回填，
-  // 找到多筆候選（同父母有其他計畫）不會自動回填，只會拿來顯示，避免子代被歸到錯誤計畫。
+  // resolveEffectiveOffspringIds 依明確歸屬（sourceBreedingPlanId → offspringIds/offspringId）
+  // 判斷這個計畫「確認」的子代清單；只靠父母組合反查到的舊資料一律歸在
+  // legacyCandidateIds，不算已確認子代，也不會自動回填 Firestore（同一對父母可能
+  // 有其他配狗計畫，光憑這一筆 plan 無法證明歸屬——即使反查只找到一隻候選也一樣）。
   // 不在每張卡片額外發 Firestore 查詢；直接使用頁面已載入的狗狗資料比對。
   // 這可避免單一查詢失敗時讓整張卡片停止渲染，也減少大量重複讀取。
-  const { ids: offspringIds, backfillableIds } = resolveEffectiveOffspringIds(plan, parentRoles, allDogs);
+  const { ids: offspringIds, legacyCandidateIds, backfillableIds } = resolveEffectiveOffspringIds(
+    plan,
+    parentRoles,
+    allDogs
+  );
   const offspringDogs = (await Promise.all(offspringIds.map((id) => getDogById(id)))).filter(Boolean);
+  const legacyCandidateDogs = (await Promise.all(legacyCandidateIds.map((id) => getDogById(id)))).filter(Boolean);
   if (backfillableIds.length > 0) {
     Promise.all(backfillableIds.map((id) => addOffspringToBreedingPlan(plan.id, id))).catch((err) => {
-      console.warn("舊子代已顯示，但回填 offspringIds 失敗：", err);
+      console.warn("子代回填 offspringIds 失敗：", err);
     });
   }
 
@@ -233,7 +238,15 @@ async function renderPlanCard(plan, listEl) {
         ? `<div class="dog-meta" style="margin-top:10px;">已建立子代：${offspringIds.length} 隻${
             offspringDogs.length > 0 ? `<br/>${offspringDogs.map((dog) => dog.name).join("、")}` : ""
           }</div>`
-        : ""
+        : plan.offspringCreated === true
+          ? `<div class="dog-meta" style="margin-top:10px; color:var(--color-warning);">
+              舊資料顯示已建立子代${
+                legacyCandidateDogs.length > 0
+                  ? `<br/>可能子代：${legacyCandidateDogs.map((dog) => dog.name).join("、")}`
+                  : ""
+              }<br/>尚未確認歸屬
+            </div>`
+          : ""
     }
 
     <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
