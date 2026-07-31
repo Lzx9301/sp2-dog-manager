@@ -129,7 +129,9 @@ dogAId, dogBId, relationType（固定為 "confirmed_related"）, source, notes, 
 > 雙向關係；只對這一對狗生效，不延伸判斷子代。
 
 ### `breedingPlans`
-dogAId, dogBId, status, interactionProgress, interactionTarget, dogALevelTarget, dogBLevelTarget, notes, offspringCreated, createdAt, updatedAt, completedAt
+dogAId, dogBId, status, interactionProgress, interactionTarget, dogALevelTarget, dogBLevelTarget, notes, createdAt, updatedAt, completedAt
+
+**子代欄位**：`offspringIds: string[]` —— 一個已完成（`completed`）的配狗計畫**可以建立多隻子代**，每次新增子代都用 Firestore 的 `arrayUnion` 把新的 dogId 加進這個陣列，不會覆蓋舊資料。`offspringCreated`（舊版布林欄位，只代表「曾經建立過至少一隻子代」）與少數更早期只存單一 `offspringId` 的資料仍然保留在 Firestore 裡沒有清除，但**不再是任何畫面判斷「是否已有子代」的依據**——全站統一呼叫 `js/utils/offspringPlan.js` 的 `resolveEffectiveOffspringIds(plan, parentRoles, allDogs)`，這個函式會合併三種來源（新版 `offspringIds` 陣列、舊版單一 `offspringId`、以及父母組合對得上但完全沒存過 dogId 的更舊資料，用反查方式找回），`breeding.js`（配狗中心）與 `dashboard.js`（工作台）都呼叫同一個函式，不會出現兩套不一致的判斷。
 
 血緣檢查快照：pedigreeStatus, pedigreeReason, pedigreeDistance, pedigreeCheckedAt（`createBreedingPlan` 建立時重新檢查後存下，僅供顯示參考，實際判斷一律以配狗中心／工作台即時重新檢查為準）
 
