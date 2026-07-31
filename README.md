@@ -131,7 +131,18 @@ dogAId, dogBId, relationType（固定為 "confirmed_related"）, source, notes, 
 ### `breedingPlans`
 dogAId, dogBId, status, interactionProgress, interactionTarget, dogALevelTarget, dogBLevelTarget, notes, createdAt, updatedAt, completedAt
 
-**子代欄位**：`offspringIds: string[]` —— 一個已完成（`completed`）的配狗計畫**可以建立多隻子代**，每次新增子代都用 Firestore 的 `arrayUnion` 把新的 dogId 加進這個陣列，不會覆蓋舊資料。`offspringCreated`（舊版布林欄位，只代表「曾經建立過至少一隻子代」）與少數更早期只存單一 `offspringId` 的資料仍然保留在 Firestore 裡沒有清除，但**不再是任何畫面判斷「是否已有子代」的依據**——全站統一呼叫 `js/utils/offspringPlan.js` 的 `resolveEffectiveOffspringIds(plan, parentRoles, allDogs)`，這個函式會合併三種來源（新版 `offspringIds` 陣列、舊版單一 `offspringId`、以及父母組合對得上但完全沒存過 dogId 的更舊資料，用反查方式找回），`breeding.js`（配狗中心）與 `dashboard.js`（工作台）都呼叫同一個函式，不會出現兩套不一致的判斷。
+**子代欄位**：`offspringIds: string[]` —— 一個已完成（`completed`）的配狗計畫**可以建立多隻子代**，每次新增子代都用 Firestore 的 `arrayUnion` 把新的 dogId 加進這個陣列，不會覆蓋舊資料。`offspringCreated`（舊版布林欄位，只代表「曾經建立過至少一隻子代」）與少數更早期只存單一 `offspringId` 的資料仍然保留在 Firestore 裡沒有清除，但**不再是任何畫面判斷「是否已有子代」的依據**。
+
+全站統一呼叫 `js/utils/offspringPlan.js` 的 `resolveEffectiveOffspringIds(plan, parentRoles, allDogs)`，`breeding.js`（配狗中心）與 `dashboard.js`（工作台）都呼叫同一個函式，不會出現兩套不一致的判斷。這個函式回傳 `{ ids, backfillableIds }`，依下面的優先順序判斷歸屬（找到就用，不再往下一步退）：
+
+1. **`dogs` 中 `sourceBreedingPlanId === plan.id` 的狗**——新增子代流程一定會寫入這個欄位，是最明確的歸屬依據。
+2. **`plan.offspringIds` 陣列／舊版單一 `plan.offspringId`**。
+3. **只有在 1、2 都完全沒有任何記錄，且 `plan.offspringCreated === true`**（代表這是連 `offspringIds` 都還沒有的更早期舊資料）時，才退而求其次，用「正確的父母組合」（`fatherId`/`motherId` 都對得上）反查目前所有狗狗資料。
+
+**這一輪修正的重點**：同一對父母可能同時有好幾筆配狗計畫，如果只憑 `fatherId`+`motherId` 相同就把所有同父母的狗都歸給每一筆計畫，子代會被歸到錯誤的計畫。所以：
+- 只有第 1、2 步都是空的時候才會啟用第 3 步的父母反查，**不會**因為同一對父母已經有其他子代，就誤判「這筆新計畫也已經有子代」。
+- 父母反查時，會排除掉「已經有 `sourceBreedingPlanId` 且指向『其他』計畫」的狗——這些狗已經有明確歸屬，不能因為父母組合剛好相同就被搶過來。
+- 父母反查如果找到超過一隻候選狗（代表無法精確判斷這些狗到底屬於同父母的哪一筆舊計畫），只會納入回傳的 `ids`（供畫面上不漏顯示舊資料）並 `console.warn` 說明無法精確歸屬，**不會**出現在 `backfillableIds` 裡、也就**不會自動回填**到 Firestore。只有找到「唯一候選」時才視為安全，會列入 `backfillableIds` 供呼叫端（`breeding.js`）寫回 `offspringIds`。
 
 血緣檢查快照：pedigreeStatus, pedigreeReason, pedigreeDistance, pedigreeCheckedAt（`createBreedingPlan` 建立時重新檢查後存下，僅供顯示參考，實際判斷一律以配狗中心／工作台即時重新檢查為準）
 
