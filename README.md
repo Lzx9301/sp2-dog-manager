@@ -96,6 +96,7 @@ service cloud.firestore {
 | dogType | "pure"\|"mixed" | 純種／混種 |
 | effects | string[] | 純種特效 id，最多 3 個 |
 | patternId | string\|null | 混種圖案 id |
+| mouthSourceBreedId | string\|null | 嘴型來源品種 id（只有圖案是「嘴」的混種狗才會用到，其餘一律 null；值是 breeds 的 id，不是顯示名稱） |
 | purityMixDegree | number | 純／混度 |
 | level | number | 等級 |
 | sourceType | "purchase"\|"exchange"\|"gift"\|"self_bred"\|"other" | 取得方式 |
@@ -117,7 +118,7 @@ name, sortOrder, isActive, createdAt, updatedAt
 name, createdAt, updatedAt
 
 ### `patterns`
-canonicalName, aliases[], blessing（預留，第一版不使用）, createdAt, updatedAt
+canonicalName, aliases[], isMouthPattern（boolean，標記「這是嘴圖案」，舊資料沒有這個欄位時視為 false）, blessing（預留，第一版不使用）, createdAt, updatedAt
 
 ### `externalPedigreeNodes`
 name, fatherId, motherId, notes, createdAt, updatedAt
@@ -368,6 +369,28 @@ dogId, fromAccountId, toAccountId, movedAt, notes
 **測試**：
 - `tests/parentRoleResolver.test.js`：8 筆案例（一公一母兩種順序、都公、都母、缺性別、都缺性別、狗不存在、同一隻狗）
 - `tests/breedingPlanValidation.test.js`：4 筆案例（血緣允許+預測有效才允許完成，其餘組合都阻止）
+
+---
+
+## 6.3 嘴型來源品種（`js/utils/mouthType.js`）
+
+**問題背景**：混種狗使用「圖案」欄位，但同一個圖案（例如「嘴」）實際上還細分很多種來源品種（熊嘴、狼嘴……），原本的 `patternId` 只能記錄「這是嘴」，記不了「這是熊嘴」。
+
+**資料欄位**：`dogs` 新增 `mouthSourceBreedId: string | null`，值是 `breeds` collection 的文件 id（不是顯示名稱），跟 `breedId`（狗自己的品種）是同一個 id 空間，兩者可以相同。只有「嘴」圖案的混種狗才會用到這個欄位，其餘一律是 `null`。
+
+**如何辨識圖案是不是「嘴」**：`patterns` collection 新增 `isMouthPattern: boolean` 旗標（預設 `false`），在「系統設定」頁面的圖案列表可以用「設為嘴圖案／取消嘴圖案標記」按鈕切換。**刻意不用 `canonicalName` 或別名字串比對**（例如檢查名稱是不是叫「嘴」）——名稱之後可能改、也可能有多種寫法，字串比對不可靠；用明確的旗標欄位才不會誤判或漏判。`isMouthPattern(pattern)` 這個純函式就是唯一的判斷點。
+
+**20 種嘴型來源品種清單從哪裡取得**：直接沿用系統既有的 `breeds`（品種管理）collection，**沒有另外建立一份平行清單**。原因：如果額外維護一份獨立的「嘴型來源清單」，之後品種異動（改名、停用、新增）就要兩邊同步，容易漏改、兩份清單長期會對不起來。因為系統本身的品種數量就接近題目說的 20 種，用同一份 `breeds` 清單完全夠用，之後品種增減也會自動反映在嘴型來源選單，不需要另外維護。驗證時用 `isValidMouthSourceBreedId(mouthSourceBreedId, validBreedIds)`，`validBreedIds` 是目前的品種 id 清單。
+
+**新增／編輯表單**：`dogs.js` 的新增狗狗表單，選到的圖案若 `isMouthPattern === true`，會顯示「嘴型來源／這是什麼嘴」必填欄位（選項是 `breeds` 清單）；圖案改成別的或改回純種，欄位自動隱藏並清空。儲存時如果是嘴狗卻沒選嘴型來源，會擋下並顯示中文錯誤，不會默默存成 `null`。既有的「完整編輯」表單（`dogDetail.js` 的編輯按鈕）目前不編輯 `dogType`／`patternId`，所以嘴型來源改用一個獨立的小 Modal（「設定嘴型」／「編輯嘴型」按鈕，在外觀區塊），只改 `mouthSourceBreedId`，不動其他欄位——這樣才不會不小心擴大成「完整狗狗編輯」的範圍。
+
+**顯示**：`dogs.js` 的列表卡片與 `dogDetail.js` 的外觀區塊，只要是嘴狗（`dogType==="mixed"` 且圖案 `isMouthPattern`），一律顯示 `formatMouthDogLabel()` 組出來的文字：有嘴型來源就是「熊嘴薩摩」，沒有就是「未設定嘴型的嘴薩摩」。**不會**用父母、名稱或任何其他欄位去猜測嘴型——猜錯比不知道更糟。
+
+**舊資料補登**：`dogs.html` 新增「待補嘴型清單」按鈕，開啟 Modal 列出「圖案是嘴、但 `mouthSourceBreedId` 缺失」的所有狗，每筆顯示狗名／自身品種／帳號，旁邊有個下拉選單＋「快速設定」按鈕，可以直接設定 `mouthSourceBreedId` 而不用開完整編輯表單，設定完那筆會立刻從清單消失。
+
+**收藏中心相容性**：`breedId` 跟 `mouthSourceBreedId` 是兩個獨立欄位，之後收藏中心可以直接照文件說的邏輯讀取——`breedId` 決定品種區塊，`mouthSourceBreedId` 決定 20 個嘴格中的哪一格；`mouthSourceBreedId` 是 `null` 或缺欄位時就是「未知」，不會被這次的程式碼自動勾選或歸類到任何一格。
+
+**測試**：`tests/mouthType.test.js`，15 筆案例，涵蓋旗標判斷（含舊資料沒有這個欄位、`null`、用名稱猜測會被刻意排除）、顯示文字組合（含缺自身品種時回傳 `null` 不硬編文字）、驗證清單比對（含空值、清單不是陣列時的防呆）。
 
 ---
 
