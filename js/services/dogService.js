@@ -115,6 +115,8 @@ function normalizeDogData(data, { partial = false } = {}) {
     result.fatherId = result.fatherId || null;
     result.motherId = result.motherId || null;
     result.birthDate = result.birthDate || null;
+    // 嘴型來源品種：只有「嘴」圖案的混種狗才需要，其餘一律 null（不是缺欄位，是明確不適用）
+    result.mouthSourceBreedId = result.mouthSourceBreedId || null;
   }
 
   return result;

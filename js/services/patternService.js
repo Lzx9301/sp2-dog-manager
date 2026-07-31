@@ -36,19 +36,22 @@ export async function getAllPatterns() {
 
 /**
  * 建立新圖案
- * @param {{canonicalName: string, aliases?: string[]}} data
+ * @param {{canonicalName: string, aliases?: string[], isMouthPattern?: boolean}} data
  */
-export async function createPattern({ canonicalName, aliases = [] }) {
+export async function createPattern({ canonicalName, aliases = [], isMouthPattern = false }) {
   const now = new Date().toISOString();
   const docRef = await addDoc(collection(db, COLLECTION_NAME), {
     canonicalName,
     aliases,
+    // 明確標記「這是嘴圖案」，之後才能正確判斷是否需要記錄嘴型來源品種
+    // （不要用 canonicalName 字串比對，名稱可能有多種寫法或之後改名）
+    isMouthPattern,
     // 祝福系統欄位預留，第一版不使用，未來擴充用
     blessing: null,
     createdAt: now,
     updatedAt: now
   });
-  return { id: docRef.id, canonicalName, aliases };
+  return { id: docRef.id, canonicalName, aliases, isMouthPattern };
 }
 
 export async function updatePattern(id, partialData) {
