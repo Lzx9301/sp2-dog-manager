@@ -28,7 +28,7 @@ import { getAllPatterns } from "../services/patternService.js";
 import { checkPedigreeCompatibility, getPedigreePermission, PEDIGREE_LEVEL } from "../utils/pedigreeService.js";
 import { predictOffspring, formatTypeLevel } from "../utils/breedingPrediction.js";
 import { resolveParentRoles } from "../utils/parentRoleResolver.js";
-import { getOffspringIds, mergeOffspringIds, canShowAddOffspring } from "../utils/offspringPlan.js";
+import { getOffspringIds, resolveEffectiveOffspringIds, canShowAddOffspring } from "../utils/offspringPlan.js";
 
 await requireLogin();
 renderNav("breeding.html");
@@ -117,17 +117,10 @@ async function renderPlanCard(plan, listEl) {
   const parentRoles = isCompletedPlan ? resolveParentRoles(dogA, dogB) : null;
 
   // 舊版第一次建立子代只把 offspringCreated 設為 true，沒有保存 dogId。
-  // 因此以正確父母組合反查共同子代，與新版 offspringIds 合併；找回後順便回填陣列。
-  // 不在每張卡片額外發 Firestore 查詢；直接使用頁面已載入的狗狗資料比對。
+  // resolveEffectiveOffspringIds 會用正確父母組合反查共同子代，與新版 offspringIds 合併；
+  // 找回後順便回填陣列。不在每張卡片額外發 Firestore 查詢；直接使用頁面已載入的狗狗資料比對。
   // 這可避免單一查詢失敗時讓整張卡片停止渲染，也減少大量重複讀取。
-  const legacyOffspringDogs = parentRoles?.valid
-    ? allDogs.filter(
-        (dog) =>
-          dog.fatherId === parentRoles.father.id &&
-          dog.motherId === parentRoles.mother.id
-      )
-    : [];
-  const offspringIds = mergeOffspringIds(recordedOffspringIds, legacyOffspringDogs);
+  const offspringIds = resolveEffectiveOffspringIds(plan, parentRoles, allDogs);
   const offspringDogs = (await Promise.all(offspringIds.map((id) => getDogById(id)))).filter(Boolean);
   const recoveredIds = offspringIds.filter((id) => !recordedOffspringIds.includes(id));
   if (recoveredIds.length > 0) {

@@ -8,9 +8,11 @@ import {
   BREEDING_PLAN_STATUS,
   BREEDING_PLAN_STATUS_LABELS
 } from "../services/breedingPlanService.js";
-import { getDogById } from "../services/dogService.js";
+import { getDogById, getAllDogs } from "../services/dogService.js";
 import { checkPedigreeCompatibility, getPedigreePermission, PEDIGREE_LEVEL } from "../utils/pedigreeService.js";
 import { predictOffspring } from "../utils/breedingPrediction.js";
+import { resolveParentRoles } from "../utils/parentRoleResolver.js";
+import { resolveEffectiveOffspringIds } from "../utils/offspringPlan.js";
 
 const loginScreen = document.getElementById("login-screen");
 const mainScreen = document.getElementById("main-screen");
@@ -80,11 +82,22 @@ async function loadDashboard() {
     .filter((p) => p.status === BREEDING_PLAN_STATUS.COMPLETED)
     .sort((a, b) => new Date(b.completedAt || 0) - new Date(a.completedAt || 0))
     .slice(0, 6);
-  // 已完成但還沒新增子代：completed 狀態，且沒有任何狗的 fatherId/motherId 對應此配對
-  // 第一版先用簡單標記：plan.offspringCreated 欄位（新增子代流程完成後應設為 true）
-  const pendingOffspringPlans = plans.filter(
-    (p) => p.status === BREEDING_PLAN_STATUS.COMPLETED && !p.offspringCreated
-  );
+
+  // 已完成但還沒新增子代：completed 狀態，且「實際子代清單」為空。
+  // 重要：不能只看 offspringCreated 這個舊版布林欄位——同一個已完成計畫現在可以
+  // 建立多隻子代，offspringIds 才是主要依據；且必須沿用跟 breeding.js 完全相同的
+  // 舊資料恢復邏輯（resolveEffectiveOffspringIds），否則舊計畫（只有 offspringCreated=true、
+  // 沒存過 dogId）會被誤判成「還沒有子代」而重複出現在這個區塊。
+  const allDogs = await getAllDogs();
+  const pendingOffspringPlans = [];
+  for (const plan of plans.filter((p) => p.status === BREEDING_PLAN_STATUS.COMPLETED)) {
+    const [dogA, dogB] = await Promise.all([getDogById(plan.dogAId), getDogById(plan.dogBId)]);
+    const parentRoles = resolveParentRoles(dogA, dogB);
+    const effectiveOffspringIds = resolveEffectiveOffspringIds(plan, parentRoles, allDogs);
+    if (effectiveOffspringIds.length === 0) {
+      pendingOffspringPlans.push(plan);
+    }
+  }
 
   await renderPlanCards("dashboard-interacting", interactingPlans, renderInteractingCard, pedigreePermissionByPlanId);
   await renderPlanCards("dashboard-leveling", levelingPlans, renderLevelingCard, pedigreePermissionByPlanId);
