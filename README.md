@@ -131,18 +131,34 @@ dogAId, dogBId, relationType（固定為 "confirmed_related"）, source, notes, 
 ### `breedingPlans`
 dogAId, dogBId, status, interactionProgress, interactionTarget, dogALevelTarget, dogBLevelTarget, notes, createdAt, updatedAt, completedAt
 
-**子代欄位**：`offspringIds: string[]` —— 一個已完成（`completed`）的配狗計畫**可以建立多隻子代**，每次新增子代都用 Firestore 的 `arrayUnion` 把新的 dogId 加進這個陣列，不會覆蓋舊資料。`offspringCreated`（舊版布林欄位，只代表「曾經建立過至少一隻子代」）與少數更早期只存單一 `offspringId` 的資料仍然保留在 Firestore 裡沒有清除，但**不再是任何畫面判斷「是否已有子代」的依據**。
+**子代欄位**：`offspringIds: string[]` —— 一個已完成（`completed`）的配狗計畫**可以建立多隻子代**，每次新增子代都用 Firestore 的 `arrayUnion` 把新的 dogId 加進這個陣列，不會覆蓋舊資料。`offspringCreated`（舊版布林欄位，只代表「曾經建立過至少一隻子代」）與少數更早期只存單一 `offspringId` 的資料仍然保留在 Firestore 裡沒有清除。
 
-全站統一呼叫 `js/utils/offspringPlan.js` 的 `resolveEffectiveOffspringIds(plan, parentRoles, allDogs)`，`breeding.js`（配狗中心）與 `dashboard.js`（工作台）都呼叫同一個函式，不會出現兩套不一致的判斷。這個函式回傳 `{ ids, backfillableIds }`，依下面的優先順序判斷歸屬（找到就用，不再往下一步退）：
+全站統一呼叫 `js/utils/offspringPlan.js` 的 `resolveEffectiveOffspringIds(plan, parentRoles, allDogs)`，`breeding.js`（配狗中心）與 `dashboard.js`（工作台）都呼叫同一個函式，不會出現兩套不一致的判斷。這個函式回傳：
 
+```js
+{
+  ids: string[],               // 明確歸屬此計畫的子代
+  legacyCandidateIds: string[], // 僅靠父母反查得到、尚未能確認歸屬的舊資料
+  backfillableIds: string[]    // 只有 sourceBreedingPlanId 明確指向此計畫、但還沒寫入 offspringIds 的狗
+}
+```
+
+**明確歸屬（`ids`）只有兩種可信來源**：
 1. **`dogs` 中 `sourceBreedingPlanId === plan.id` 的狗**——新增子代流程一定會寫入這個欄位，是最明確的歸屬依據。
 2. **`plan.offspringIds` 陣列／舊版單一 `plan.offspringId`**。
-3. **只有在 1、2 都完全沒有任何記錄，且 `plan.offspringCreated === true`**（代表這是連 `offspringIds` 都還沒有的更早期舊資料）時，才退而求其次，用「正確的父母組合」（`fatherId`/`motherId` 都對得上）反查目前所有狗狗資料。
 
-**這一輪修正的重點**：同一對父母可能同時有好幾筆配狗計畫，如果只憑 `fatherId`+`motherId` 相同就把所有同父母的狗都歸給每一筆計畫，子代會被歸到錯誤的計畫。所以：
-- 只有第 1、2 步都是空的時候才會啟用第 3 步的父母反查，**不會**因為同一對父母已經有其他子代，就誤判「這筆新計畫也已經有子代」。
-- 父母反查時，會排除掉「已經有 `sourceBreedingPlanId` 且指向『其他』計畫」的狗——這些狗已經有明確歸屬，不能因為父母組合剛好相同就被搶過來。
-- 父母反查如果找到超過一隻候選狗（代表無法精確判斷這些狗到底屬於同父母的哪一筆舊計畫），只會納入回傳的 `ids`（供畫面上不漏顯示舊資料）並 `console.warn` 說明無法精確歸屬，**不會**出現在 `backfillableIds` 裡、也就**不會自動回填**到 Firestore。只有找到「唯一候選」時才視為安全，會列入 `backfillableIds` 供呼叫端（`breeding.js`）寫回 `offspringIds`。
+**父母反查（`fatherId`/`motherId` 都對得上）永遠不算「確認歸屬」，不論找到幾隻候選**：只有在上面兩種明確歸屬都完全沒有記錄、且 `plan.offspringCreated === true`（代表這是連 `offspringIds` 都沒有的更早期舊資料）時，才會執行父母反查，結果一律放進 `legacyCandidateIds`，**絕對不會出現在 `ids` 或 `backfillableIds` 裡，也絕對不會被自動寫回 Firestore**——即使剛好只反查到一隻候選也一樣。
+
+**這一輪修正的重點**：同一對父母可能同時有好幾筆配狗計畫，光憑 `fatherId`+`motherId` 相同並不能證明反查到的狗屬於「這一筆」計畫，而不是同父母另一筆計畫生出來的；就算剛好只找到一隻候選，也只是「目前只看到一隻」，不是「證明只有一隻」，所以不能把它當成安全可回填的資料（上一輪的實作曾經誤把「唯一候選」當成安全可回填，這一輪已經修正）。因此：
+- 只有明確歸屬完全是空的時候，才會啟用父母反查，**不會**因為同一對父母已經有其他子代，就誤判「這筆新計畫也已經有子代」。
+- 父母反查時，會排除掉「已經有 `sourceBreedingPlanId` 且指向『其他』計畫」的狗——這些狗已經有明確歸屬，不能因為父母組合剛好相同就被搶過來當候選。
+- 反查找到候選（不論一隻或多隻）都只會列入 `legacyCandidateIds` 並 `console.warn` 說明無法證明歸屬，供 `breeding.js` 顯示成「舊資料顯示已建立子代／可能子代：A、B／尚未確認歸屬」，**不會**顯示成「已建立子代：N 隻」（那個文字只用在 `ids` 有明確歸屬的情況）。
+
+**Dashboard「是否已有子代」的判斷**：不能只看 `ids.length`，也不能把 `legacyCandidateIds` 算進去。正確寫法是：
+```js
+const hasConfirmedOffspring = result.ids.length > 0 || plan.offspringCreated === true;
+```
+`offspringCreated === true` 代表「舊資料顯示已經建立過子代」，即使目前反查不到明確 dogId，也不該讓這種計畫又跑回「尚未新增子代」區塊；但同時也不能因為 `legacyCandidateIds` 有東西就當作確認——沒有 `offspringCreated` 旗標、只是剛好同父母有其他狗的新版計畫，仍然要正常列入「尚未新增子代」。
 
 血緣檢查快照：pedigreeStatus, pedigreeReason, pedigreeDistance, pedigreeCheckedAt（`createBreedingPlan` 建立時重新檢查後存下，僅供顯示參考，實際判斷一律以配狗中心／工作台即時重新檢查為準）
 
