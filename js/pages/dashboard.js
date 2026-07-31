@@ -93,7 +93,7 @@ async function loadDashboard() {
   for (const plan of plans.filter((p) => p.status === BREEDING_PLAN_STATUS.COMPLETED)) {
     const [dogA, dogB] = await Promise.all([getDogById(plan.dogAId), getDogById(plan.dogBId)]);
     const parentRoles = resolveParentRoles(dogA, dogB);
-    const effectiveOffspringIds = resolveEffectiveOffspringIds(plan, parentRoles, allDogs);
+    const { ids: effectiveOffspringIds } = resolveEffectiveOffspringIds(plan, parentRoles, allDogs);
     if (effectiveOffspringIds.length === 0) {
       pendingOffspringPlans.push(plan);
     }

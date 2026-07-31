@@ -28,7 +28,7 @@ import { getAllPatterns } from "../services/patternService.js";
 import { checkPedigreeCompatibility, getPedigreePermission, PEDIGREE_LEVEL } from "../utils/pedigreeService.js";
 import { predictOffspring, formatTypeLevel } from "../utils/breedingPrediction.js";
 import { resolveParentRoles } from "../utils/parentRoleResolver.js";
-import { getOffspringIds, resolveEffectiveOffspringIds, canShowAddOffspring } from "../utils/offspringPlan.js";
+import { resolveEffectiveOffspringIds, canShowAddOffspring } from "../utils/offspringPlan.js";
 
 await requireLogin();
 renderNav("breeding.html");
@@ -110,21 +110,20 @@ async function renderPlanCard(plan, listEl) {
 
   const [dogA, dogB] = await Promise.all([getDogById(plan.dogAId), getDogById(plan.dogBId)]);
 
-  const recordedOffspringIds = getOffspringIds(plan);
-
   // 已完成計畫無論已有幾隻子代，都重新判定父母、血緣與預測；子代數量不參與按鈕顯示條件。
   const isCompletedPlan = plan.status === BREEDING_PLAN_STATUS.COMPLETED;
   const parentRoles = isCompletedPlan ? resolveParentRoles(dogA, dogB) : null;
 
   // 舊版第一次建立子代只把 offspringCreated 設為 true，沒有保存 dogId。
-  // resolveEffectiveOffspringIds 會用正確父母組合反查共同子代，與新版 offspringIds 合併；
-  // 找回後順便回填陣列。不在每張卡片額外發 Firestore 查詢；直接使用頁面已載入的狗狗資料比對。
+  // resolveEffectiveOffspringIds 會依優先順序（sourceBreedingPlanId → offspringIds → 父母反查）
+  // 判斷這個計畫實際的子代清單；父母反查只有唯一候選時才會建議回填，
+  // 找到多筆候選（同父母有其他計畫）不會自動回填，只會拿來顯示，避免子代被歸到錯誤計畫。
+  // 不在每張卡片額外發 Firestore 查詢；直接使用頁面已載入的狗狗資料比對。
   // 這可避免單一查詢失敗時讓整張卡片停止渲染，也減少大量重複讀取。
-  const offspringIds = resolveEffectiveOffspringIds(plan, parentRoles, allDogs);
+  const { ids: offspringIds, backfillableIds } = resolveEffectiveOffspringIds(plan, parentRoles, allDogs);
   const offspringDogs = (await Promise.all(offspringIds.map((id) => getDogById(id)))).filter(Boolean);
-  const recoveredIds = offspringIds.filter((id) => !recordedOffspringIds.includes(id));
-  if (recoveredIds.length > 0) {
-    Promise.all(recoveredIds.map((id) => addOffspringToBreedingPlan(plan.id, id))).catch((err) => {
+  if (backfillableIds.length > 0) {
+    Promise.all(backfillableIds.map((id) => addOffspringToBreedingPlan(plan.id, id))).catch((err) => {
       console.warn("舊子代已顯示，但回填 offspringIds 失敗：", err);
     });
   }
