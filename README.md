@@ -412,11 +412,15 @@ dogId, fromAccountId, toAccountId, movedAt, notes
 
 **20 種嘴型來源品種清單從哪裡取得**：直接沿用系統既有的 `breeds`（品種管理）collection，**沒有另外建立一份平行清單**。原因：如果額外維護一份獨立的「嘴型來源清單」，之後品種異動（改名、停用、新增）就要兩邊同步，容易漏改、兩份清單長期會對不起來。因為系統本身的品種數量就接近題目說的 20 種，用同一份 `breeds` 清單完全夠用，之後品種增減也會自動反映在嘴型來源選單，不需要另外維護。驗證時用 `isValidMouthSourceBreedId(mouthSourceBreedId, validBreedIds)`，`validBreedIds` 是目前的品種 id 清單。
 
-**新增／編輯表單**：`dogs.js` 的新增狗狗表單，選到的圖案若 `isMouthPattern === true`，會顯示「嘴型來源／這是什麼嘴」必填欄位（選項是 `breeds` 清單）；圖案改成別的或改回純種，欄位自動隱藏並清空。儲存時如果是嘴狗卻沒選嘴型來源，會擋下並顯示中文錯誤，不會默默存成 `null`。既有的「完整編輯」表單（`dogDetail.js` 的編輯按鈕）目前不編輯 `dogType`／`patternId`，所以嘴型來源改用一個獨立的小 Modal（「設定嘴型」／「編輯嘴型」按鈕，在外觀區塊），只改 `mouthSourceBreedId`，不動其他欄位——這樣才不會不小心擴大成「完整狗狗編輯」的範圍。
+**新增／編輯表單**：`dogs.js` 的新增狗狗表單、`breeding.js` 的新增子代表單、`dogDetail.js` 的完整編輯表單，三個地方選到的圖案若 `isMouthPattern === true`，都會顯示「嘴型來源／這是什麼嘴」必填欄位（選項是 `breeds` 清單）；圖案改成別的或改回純種，欄位自動隱藏並清空。儲存時如果是嘴狗卻沒選嘴型來源，會擋下並顯示中文錯誤，不會默默存成 `null`。
+
+`dogDetail.js` 外觀區塊的「設定嘴型」／「編輯嘴型」按鈕開啟的是一個**獨立的快速設定 Modal**，只改 `mouthSourceBreedId`、不動其他欄位，適合單純想補一個嘴型來源、不想開整個編輯表單的情境；它**不是修改嘴型來源的唯一入口**——完整編輯表單（按「編輯」按鈕）現在也可以一起改 `dogType`／`patternId`／`mouthSourceBreedId`，兩個入口最後都是呼叫同一個 `updateDog()`，行為一致。
 
 **顯示**：`dogs.js` 的列表卡片與 `dogDetail.js` 的外觀區塊，只要是嘴狗（`dogType==="mixed"` 且圖案 `isMouthPattern`），一律顯示 `formatMouthDogLabel()` 組出來的文字：有嘴型來源就是「熊嘴薩摩」，沒有就是「未設定嘴型的嘴薩摩」。**不會**用父母、名稱或任何其他欄位去猜測嘴型——猜錯比不知道更糟。
 
 **舊資料補登**：`dogs.html` 新增「待補嘴型清單」按鈕，開啟 Modal 列出「圖案是嘴、但 `mouthSourceBreedId` 缺失」的所有狗，每筆顯示狗名／自身品種／帳號，旁邊有個下拉選單＋「快速設定」按鈕，可以直接設定 `mouthSourceBreedId` 而不用開完整編輯表單，設定完那筆會立刻從清單消失。
+
+**建立子代**：`breeding.js` 的新增子代表單跟新增／編輯狗狗共用同一套邏輯——混種選圖案後若該圖案 `isMouthPattern === true`，一樣會顯示嘴型來源必填欄位，`createDog()` 時寫入 `mouthSourceBreedId: isMouthDog ? selectedId : null`，共用現有的 `isMouthPattern()`／`isValidMouthSourceBreedId()`，不會另外用名稱字串判斷。
 
 **收藏中心相容性**：`breedId` 跟 `mouthSourceBreedId` 是兩個獨立欄位，之後收藏中心可以直接照文件說的邏輯讀取——`breedId` 決定品種區塊，`mouthSourceBreedId` 決定 20 個嘴格中的哪一格；`mouthSourceBreedId` 是 `null` 或缺欄位時就是「未知」，不會被這次的程式碼自動勾選或歸類到任何一格。
 
@@ -440,12 +444,14 @@ dogId, fromAccountId, toAccountId, movedAt, notes
 
 **共用到哪些地方**：
 - `dogService.js`：`createDog`／`updateDog` 內部呼叫，作為第二層防呆（不信任前端傳來的 `effects`），不合法直接 `throw` 中文錯誤
+  - `updateDog()` 的驗證方式：**不是只有 partialData 同時包含 `dogType` 與 `effects` 時才驗證**——每次呼叫都會先讀出目前的狗狗資料，把「這次有傳的值」跟「目前既有的值（這次沒傳）」合併成 `finalDogType`／`finalEffects`，一律用合併後的結果驗證（`validateDogEffectsUpdate(currentDog, partialData)`）。這代表只改 `dogType`（純種切混種，但沒有一併改 `effects`）或只改 `effects`（沒有一併傳 `dogType`）都會被正確擋下，不會出現「混種卻保留 2～3 個特效」這種不合法狀態。驗證失敗一律 `throw` 中文錯誤、擋下 Firestore 寫入，**不會**靜默把資料截斷成合法值再默默存進去。
 - `effectService.js`：re-export 給既有程式碼引用，不重複定義規則；舊的 `MAX_EFFECTS_PER_DOG`、`isValidEffectSelection` 標記 `@deprecated` 但保留相容
-- `dogs.js`（新增狗狗）、`breeding.js`（新增子代）、`dogDetail.js`（編輯狗狗）：三個表單的特效 checkbox 都改用共用元件 `js/components/effectPicker.js` 的 `buildEffectCheckboxesHtml()` 產生 HTML、`attachEffectEnforcement()` 掛上即時限制行為，不再各自寫 checkbox 邏輯
+- `dogs.js`（新增狗狗）、`breeding.js`（新增子代）、`dogDetail.js`（編輯狗狗）：三個表單的特效 checkbox 都改用共用元件 `js/components/effectPicker.js` 的 `buildEffectCheckboxesHtml()` 產生 HTML、`attachEffectEnforcement()` 掛上即時限制行為（這一層是 UI 端的即時體驗，跟 Service 層的驗證是兩層獨立防呆，UI 被繞過時 Service 層還是會擋）
+- `dogDetail.js` 的 `renderAppearanceSection()`：純種與混種都會顯示特效（原本混種分支漏掉了，只有純種會顯示），沒有特效顯示「（無）」；混種同時保留圖案、嘴型來源、外觀組合文字的顯示
 
-**切換純種／混種時的行為**（`attachEffectEnforcement` 的 `enforceOnTypeChange()`）：不會直接清空已勾選的特效，而是保留前面的合法數量，超過的部分才移除，並在旁邊顯示提示文字。例如純種選了 A、B、C 三個特效，切成混種後會自動保留 A、移除 B、C，並提示「混種最多只能選 1 個特效」。使用者手動勾選導致超過上限時（例如混種已經勾了 1 個又想勾第 2 個），會直接復原剛剛那個勾選動作，不會讓畫面出現「已經超過上限」的中間狀態。
+**切換純種／混種時的行為**（`attachEffectEnforcement` 的 `enforceOnTypeChange()`，這是 UI 端的即時體驗，維持不變）：不會直接清空已勾選的特效，而是保留前面的合法數量，超過的部分才移除，並在旁邊顯示提示文字。例如純種選了 A、B、C 三個特效，切成混種後會自動保留 A、移除 B、C，並提示「混種最多只能選 1 個特效」。使用者手動勾選導致超過上限時（例如混種已經勾了 1 個又想勾第 2 個），會直接復原剛剛那個勾選動作，不會讓畫面出現「已經超過上限」的中間狀態。
 
-**測試**：`tests/effectValidation.test.js`，19 筆案例，涵蓋純種 0~4 個特效、混種 0~2 個特效、型別切換保留前面合法數量、重複 id 去重、`effects` 為 `undefined` 不崩潰等情況。
+**測試**：`tests/effectValidation.test.js`，25 筆案例，涵蓋純種 0~4 個特效、混種 0~2 個特效、型別切換保留前面合法數量、重複 id 去重、`effects` 為 `undefined` 不崩潰，以及 `validateDogEffectsUpdate` 的合併驗證（只改 `dogType`、只改 `effects`、只改其他欄位、同時改兩者）等情況。
 
 ---
 
@@ -453,7 +459,7 @@ dogId, fromAccountId, toAccountId, movedAt, notes
 
 原本的編輯表單只能改名稱、系列、性別、等級、純／混度、父母、備註，這次補齊成可以編輯狗狗的完整外觀與來源資訊：
 
-**基本資料**：名稱、系列、品種（`breedId`）、性別、純種／混種（`dogType`，切換時會同步更新特效上限與圖案／嘴型來源欄位的顯示）、純度／混度（標籤依 `dogType` 動態顯示「純度」或「混度」）、圖案（`patternId`，只有混種才顯示）、嘴型來源（只有選到「嘴」圖案才顯示，且必填並驗證是否在 `breeds` 清單內）、特效（依 `dogType` 套用共用規則）、所屬帳號（`accountId`）、備註。
+**基本資料**：名稱、系列、品種（`breedId`）、性別、純種／混種（`dogType`，切換時會同步更新特效上限與圖案／嘴型來源欄位的顯示）、純度／混度（標籤依 `dogType` 動態顯示「純度」或「混度」）、圖案（`patternId`，只有混種才顯示）、嘴型來源（`mouthSourceBreedId`，只有選到「嘴」圖案才顯示，且必填並驗證是否在 `breeds` 清單內——這裡跟新增狗狗、新增子代共用同一套 `isMouthPattern()`／`isValidMouthSourceBreedId()`，不是各自判斷）、特效（依 `dogType` 套用共用規則）、所屬帳號（`accountId`）、備註。
 
 **來源資訊**：來源類型（`sourceType`）、來源對象（`sourcePerson`）、金額（`sourceAmount`，新欄位，選填）、出生日（`birthDate`）、紀念日（`memorialTags`，多個標籤用 Enter 新增）。
 
