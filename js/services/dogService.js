@@ -18,7 +18,7 @@ import {
   where
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { generateDogId } from "../utils/idGenerator.js";
-import { validateDogEffects } from "../utils/effectValidation.js";
+import { validateDogEffects, validateDogEffectsUpdate } from "../utils/effectValidation.js";
 
 const COLLECTION_NAME = "dogs";
 
@@ -100,18 +100,35 @@ export async function createDog(dogData) {
 
 /**
  * 更新狗狗資料（局部更新）
- * @throws {Error} 若這次更新同時包含 dogType 與 effects，且不符合特效數量規則，
- *   拋出中文錯誤（只有兩者都出現在這次更新時才驗證，避免單獨更新其他欄位
- *   時因為沒有 dogType 上下文而誤判）
+ *
+ * 特效規則防呆（這一輪修正的重點）：不能只在 partialData 同時包含 dogType 與 effects
+ * 時才驗證——只改 dogType（例如純種切混種，但沒有一併傳 effects）或只改 effects
+ * （沒有一併傳 dogType）都必須驗證，因為任何一種情況都可能讓資料違反規則
+ * （例如把已經有 3 個特效的純種狗改成混種，卻沒有同時修改 effects）。
+ *
+ * 做法：每次呼叫都先讀取目前的狗狗資料，把「這次要更新的值（如果有傳）」跟
+ * 「目前既有的值（如果這次沒傳）」合併成 finalDogType / finalEffects，一律用
+ * 合併後的結果驗證。不合法就直接 throw 中文錯誤、擋下這次 Firestore 更新，
+ * 不會靜默把資料截斷成合法值再默默寫入。
+ *
+ * @throws {Error} 找不到狗狗，或合併後的 dogType/effects 不符合特效數量規則時
  */
 export async function updateDog(id, partialData) {
   const normalized = normalizeDogData(partialData, { partial: true });
 
-  if (normalized.dogType !== undefined && normalized.effects !== undefined) {
-    const effectsCheck = validateDogEffects(normalized.dogType, normalized.effects);
-    if (!effectsCheck.valid) {
-      throw new Error(effectsCheck.errorMessage);
-    }
+  const currentDog = await getDogById(id);
+  if (!currentDog) {
+    throw new Error("找不到指定的狗狗，無法更新");
+  }
+
+  const effectsCheck = validateDogEffectsUpdate(currentDog, normalized);
+  if (!effectsCheck.valid) {
+    throw new Error(effectsCheck.errorMessage);
+  }
+
+  // 這次更新真的有動到 effects 時，才把（驗證通過後）去重的結果一併寫回去；
+  // 沒有動到 effects 的更新，不會無緣無故在這次 partial update 裡多塞一個 effects 欄位。
+  if (normalized.effects !== undefined) {
     normalized.effects = effectsCheck.correctedEffects;
   }
 
