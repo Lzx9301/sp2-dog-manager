@@ -191,3 +191,16 @@ export function formatTypeLevel(type, level) {
   const levelLabel = type === "pure" ? "純度" : "混度";
   return `${typeLabel}／${levelLabel} ${numLevel}`;
 }
+
+/**
+ * 取得純種／混種數值欄位該用的標籤文字：純種是「純度」、混種是「混度」。
+ * 不要在畫面上直接寫死含糊的「純／混度」——那個字眼看不出來是純度還是混度。
+ * dogType 還沒選定（例如新增表單初始狀態）時，退回「純度／混度」這種還沒決定的中性字樣。
+ *
+ * @param {string|undefined} dogType
+ */
+export function getPurityLevelLabel(dogType) {
+  if (dogType === "pure") return "純度";
+  if (dogType === "mixed") return "混度";
+  return "純度／混度";
+}
