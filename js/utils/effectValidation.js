@@ -55,3 +55,21 @@ export function validateDogEffects(dogType, effects) {
     errorMessage: valid ? null : `${typeLabel}最多只能選 ${max} 個特效`
   };
 }
+
+/**
+ * 給 updateDog() 用的合併驗證：不能只在 partialData 同時包含 dogType 與 effects
+ * 時才驗證——只改其中一個也要用「合併目前資料後的結果」驗證，避免繞過規則
+ *（例如把已經有 3 個特效的純種狗改成混種，卻沒有一併修改 effects）。
+ *
+ * 純函式，不做任何 Firestore 讀寫，方便獨立測試；dogService.js 的 updateDog()
+ * 會先自己讀出 currentDog，再呼叫這裡驗證。
+ *
+ * @param {{dogType？: string, effects?: string[]}|null} currentDog - 目前已經存在的狗狗資料
+ * @param {{dogType?: string, effects?: string[]}} partialData - 這次要更新的內容（可能沒有 dogType／effects）
+ * @returns {{valid: boolean, correctedEffects: string[], errorMessage: string|null}}
+ */
+export function validateDogEffectsUpdate(currentDog, partialData) {
+  const finalDogType = partialData?.dogType !== undefined ? partialData.dogType : currentDog?.dogType;
+  const finalEffects = partialData?.effects !== undefined ? partialData.effects : currentDog?.effects;
+  return validateDogEffects(finalDogType, finalEffects);
+}
