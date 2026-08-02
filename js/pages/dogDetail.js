@@ -6,6 +6,7 @@ import { renderNav } from "../components/nav.js";
 import { openModal, confirmModal } from "../components/modal.js";
 import { attachAutocomplete, attachTagInput } from "../components/autocomplete.js";
 import { buildParentOptionsHtml, attachAddExternalNodeButton, attachGenderMismatchWarning } from "../components/parentPicker.js";
+import { buildEffectCheckboxesHtml, attachEffectEnforcement } from "../components/effectPicker.js";
 import {
   getDogById,
   updateDog,
@@ -17,7 +18,7 @@ import {
 } from "../services/dogService.js";
 import { getAccountById, getActiveAccounts } from "../services/accountService.js";
 import { getActiveBreeds, getBreedById } from "../services/breedService.js";
-import { getAllEffects, getEffectById, MAX_EFFECTS_PER_DOG } from "../services/effectService.js";
+import { getAllEffects, getEffectById } from "../services/effectService.js";
 import { getAllPatterns, getPatternById } from "../services/patternService.js";
 import { getExternalNodeById, getAllExternalNodes } from "../services/externalPedigreeService.js";
 import {
@@ -29,8 +30,9 @@ import {
 } from "../services/breedingPlanService.js";
 import { moveDogToAccount, getMovementLogsOfDog } from "../services/movementLogService.js";
 import { checkPedigreeCompatibility, wouldCreateCycle, getPedigreePermission, PEDIGREE_LEVEL } from "../utils/pedigreeService.js";
-import { predictOffspring, formatTypeLevel } from "../utils/breedingPrediction.js";
+import { predictOffspring, formatTypeLevel, getPurityLevelLabel } from "../utils/breedingPrediction.js";
 import { resolveParentRoles } from "../utils/parentRoleResolver.js";
+import { validateDogEffects, getMaxEffectsForDogType } from "../utils/effectValidation.js";
 import { GENDER_LABELS, DOG_TYPE_LABELS, SOURCE_TYPE_LABELS } from "../utils/constants.js";
 import { isMouthPattern, formatMouthDogLabel, isValidMouthSourceBreedId } from "../utils/mouthType.js";
 
@@ -57,6 +59,11 @@ async function loadReferenceData() {
     getAllDogs(),
     getAllExternalNodes()
   ]);
+}
+
+/** 從已載入的 patterns 陣列同步查找（不打 Firestore），供表單即時互動使用 */
+function patternById(patternId) {
+  return patterns.find((p) => p.id === patternId) || null;
 }
 
 async function loadDog() {
@@ -92,7 +99,7 @@ async function renderBasicSection() {
       <div><strong>所在帳號：</strong>${account ? account.accountName : "（未指定）"}</div>
       <div><strong>品種：</strong>${breed ? breed.name : "（未設定）"}</div>
       <div><strong>等級：</strong>Lv.${dog.level ?? "-"}</div>
-      <div><strong>純／混度：</strong>${dog.purityMixDegree ?? "-"}</div>
+      <div><strong>${getPurityLevelLabel(dog.dogType)}：</strong>${dog.purityMixDegree ?? "-"}</div>
     </div>
     <div style="margin-top:8px;"><strong>備註：</strong>${dog.notes || "（無）"}</div>
   `;
@@ -186,6 +193,7 @@ function renderSourceSection() {
   document.getElementById("section-source").innerHTML = `
     <div><strong>取得方式：</strong>${SOURCE_TYPE_LABELS[dog.sourceType] || "（未設定）"}</div>
     <div><strong>來源對象：</strong>${dog.sourcePerson || "（無）"}</div>
+    <div><strong>金額：</strong>${dog.sourceAmount ?? "（未填）"}</div>
     <div><strong>生日：</strong>${dog.birthDate || "（未填）"}</div>
     <div><strong>紀念標籤：</strong>${
       (dog.memorialTags || []).map((t) => `<span class="tag">${t}</span>`).join("") || "（無）"
@@ -319,12 +327,39 @@ async function renderMovementLogsSection() {
 // ---------- 編輯 ----------
 
 function openEditModal() {
+  const accountOptionsHtml = accounts
+    .map((a) => `<option value="${a.id}" ${a.id === dog.accountId ? "selected" : ""}>${a.accountName}</option>`)
+    .join("");
+  const breedOptionsHtml = breeds
+    .map((b) => `<option value="${b.id}" ${b.id === dog.breedId ? "selected" : ""}>${b.name}</option>`)
+    .join("");
+  const patternOptionsHtml = patterns
+    .map((p) => `<option value="${p.id}" ${p.id === dog.patternId ? "selected" : ""}>${p.canonicalName}</option>`)
+    .join("");
+  const mouthSourceOptionsHtml = breeds
+    .map((b) => `<option value="${b.id}" ${b.id === dog.mouthSourceBreedId ? "selected" : ""}>${b.name}</option>`)
+    .join("");
+  const initialDogType = dog.dogType === "mixed" ? "mixed" : "pure"; // 舊資料若完全沒設定，先當純種處理，讓表單有預設值可操作
+  const initialPattern = patternById(dog.patternId);
+  const initialIsMouthDog = initialDogType === "mixed" && isMouthPattern(initialPattern);
+
   const { close, el } = openModal({
     title: "編輯狗狗資料",
     contentHtml: `
+      <h4 style="margin:4px 0 8px;">基本資料</h4>
       <div class="form-row">
         <div class="form-group"><label>名稱</label><input type="text" id="e-name" value="${dog.name || ""}" /></div>
         <div class="form-group"><label>系列</label><input type="text" id="e-series" value="${dog.series || ""}" /></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>品種</label>
+          <select id="e-breed"><option value="">（未設定）</option>${breedOptionsHtml}</select>
+        </div>
+        <div class="form-group">
+          <label>所屬帳號</label>
+          <select id="e-account"><option value="">（未指定）</option>${accountOptionsHtml}</select>
+        </div>
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -335,11 +370,73 @@ function openEditModal() {
           </select>
         </div>
         <div class="form-group">
+          <label>純種／混種</label>
+          <select id="e-dogtype">
+            <option value="pure" ${initialDogType === "pure" ? "selected" : ""}>純種</option>
+            <option value="mixed" ${initialDogType === "mixed" ? "selected" : ""}>混種</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label id="e-purity-label">${getPurityLevelLabel(initialDogType)}</label>
+          <input type="number" id="e-purity" value="${dog.purityMixDegree ?? 0}" />
+        </div>
+        <div class="form-group">
           <label>等級</label>
           <input type="number" id="e-level" value="${dog.level ?? 1}" />
         </div>
       </div>
 
+      <div class="form-group" id="e-pattern-group" style="display:${initialDogType === "mixed" ? "block" : "none"};">
+        <label>圖案（混種）</label>
+        <select id="e-pattern"><option value="">（未設定）</option>${patternOptionsHtml}</select>
+      </div>
+      <div class="form-group" id="e-mouth-source-group" style="display:${initialIsMouthDog ? "block" : "none"};">
+        <label>嘴型來源／這是什麼嘴</label>
+        <select id="e-mouth-source"><option value="">${dog.mouthSourceBreedId ? "（清空）" : "尚未設定"}</option>${mouthSourceOptionsHtml}</select>
+      </div>
+
+      <div class="form-group" id="e-effects-group">
+        <label id="e-effects-label">特效（${initialDogType === "pure" ? "純種" : "混種"}最多 ${getMaxEffectsForDogType(initialDogType)} 個）</label>
+        ${buildEffectCheckboxesHtml(effects, dog.effects || [], "e-effect")}
+        <div id="e-effects-warning" style="color:var(--color-warning); font-size:12px; margin-top:2px;"></div>
+      </div>
+
+      <h4 style="margin:16px 0 8px;">來源資訊</h4>
+      <div class="form-row">
+        <div class="form-group">
+          <label>來源類型</label>
+          <select id="e-source-type">
+            <option value="purchase" ${dog.sourceType === "purchase" ? "selected" : ""}>購買</option>
+            <option value="exchange" ${dog.sourceType === "exchange" ? "selected" : ""}>交換</option>
+            <option value="gift" ${dog.sourceType === "gift" ? "selected" : ""}>贈送</option>
+            <option value="self_bred" ${dog.sourceType === "self_bred" ? "selected" : ""}>自己接生</option>
+            <option value="other" ${dog.sourceType === "other" ? "selected" : ""}>其他</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>來源對象</label>
+          <input type="text" id="e-source-person" value="${dog.sourcePerson || ""}" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>金額（選填）</label>
+          <input type="number" id="e-source-amount" value="${dog.sourceAmount ?? ""}" />
+        </div>
+        <div class="form-group">
+          <label>出生日（選填）</label>
+          <input type="date" id="e-birthdate" value="${dog.birthDate || ""}" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label>紀念日（可多個，按 Enter 新增）</label>
+        <div id="e-tag-chips"></div>
+        <input type="text" id="e-tag-input" placeholder="輸入後按 Enter" />
+      </div>
+
+      <h4 style="margin:16px 0 8px;">父母</h4>
       <div class="form-row">
         <div class="form-group">
           <label>父親（選填）</label>
@@ -367,7 +464,6 @@ function openEditModal() {
         </div>
       </div>
 
-      <div class="form-group"><label>純／混度</label><input type="number" id="e-purity" value="${dog.purityMixDegree ?? 0}" /></div>
       <div class="form-group"><label>備註</label><textarea id="e-notes">${dog.notes || ""}</textarea></div>
       <div id="e-error" style="color:#b3543f; font-size:13px;"></div>
       <div class="modal-actions">
@@ -378,12 +474,57 @@ function openEditModal() {
     onMount: (modalEl, close) => {
       attachAutocomplete(modalEl.querySelector("#e-series"), []);
 
+      const tagController = attachTagInput(
+        modalEl.querySelector("#e-tag-chips"),
+        modalEl.querySelector("#e-tag-input"),
+        [],
+        dog.memorialTags || []
+      );
+
       const fatherSelect = modalEl.querySelector("#e-father");
       const motherSelect = modalEl.querySelector("#e-mother");
       attachAddExternalNodeButton(modalEl.querySelector("#e-add-external-father"), fatherSelect, externalNodes);
       attachAddExternalNodeButton(modalEl.querySelector("#e-add-external-mother"), motherSelect, externalNodes);
       attachGenderMismatchWarning(fatherSelect, modalEl.querySelector("#e-father-warning"), allDogs, "male");
       attachGenderMismatchWarning(motherSelect, modalEl.querySelector("#e-mother-warning"), allDogs, "female");
+
+      // 純種／混種切換：圖案／嘴型來源顯示切換、特效上限即時更新、純度標籤動態更新
+      const dogTypeSelect = modalEl.querySelector("#e-dogtype");
+      const patternGroup = modalEl.querySelector("#e-pattern-group");
+      const patternSelect = modalEl.querySelector("#e-pattern");
+      const mouthSourceGroup = modalEl.querySelector("#e-mouth-source-group");
+      const effectsLabel = modalEl.querySelector("#e-effects-label");
+      const purityLabel = modalEl.querySelector("#e-purity-label");
+
+      const effectEnforcement = attachEffectEnforcement({
+        containerEl: modalEl,
+        checkboxSelector: ".e-effect",
+        getDogType: () => dogTypeSelect.value,
+        warningEl: modalEl.querySelector("#e-effects-warning")
+      });
+
+      function syncMouthSourceVisibility() {
+        const isMixed = dogTypeSelect.value === "mixed";
+        const selectedPattern = patternById(patternSelect.value);
+        const showMouthField = isMixed && isMouthPattern(selectedPattern);
+        mouthSourceGroup.style.display = showMouthField ? "block" : "none";
+        if (!showMouthField) {
+          modalEl.querySelector("#e-mouth-source").value = "";
+        }
+      }
+
+      function syncDogTypeDependentUI() {
+        const dogType = dogTypeSelect.value;
+        patternGroup.style.display = dogType === "mixed" ? "block" : "none";
+        effectsLabel.textContent = `特效（${dogType === "pure" ? "純種" : "混種"}最多 ${getMaxEffectsForDogType(dogType)} 個）`;
+        purityLabel.textContent = getPurityLevelLabel(dogType);
+        // 切換類型時：不直接清空已勾選的特效，保留前面的合法數量，超過的部分才移除
+        effectEnforcement.enforceOnTypeChange();
+        syncMouthSourceVisibility();
+      }
+
+      dogTypeSelect.addEventListener("change", syncDogTypeDependentUI);
+      patternSelect.addEventListener("change", syncMouthSourceVisibility);
 
       modalEl.querySelector('[data-action="cancel"]').addEventListener("click", close);
       modalEl.querySelector('[data-action="save"]').addEventListener("click", async () => {
@@ -409,22 +550,54 @@ function openEditModal() {
           }
         }
 
+        const newDogType = dogTypeSelect.value;
+        const selectedEffectIds = effectEnforcement.getCheckedIds();
+        const effectsCheck = validateDogEffects(newDogType, selectedEffectIds);
+        if (!effectsCheck.valid) {
+          errorEl.textContent = effectsCheck.errorMessage;
+          return;
+        }
+
+        const selectedPatternId = newDogType === "mixed" ? patternSelect.value || null : null;
+        const selectedPattern = patternById(selectedPatternId);
+        const isMouthDog = newDogType === "mixed" && isMouthPattern(selectedPattern);
+        const mouthSourceBreedId = modalEl.querySelector("#e-mouth-source").value || null;
+        const validBreedIds = breeds.map((b) => b.id);
+
+        if (isMouthDog && !isValidMouthSourceBreedId(mouthSourceBreedId, validBreedIds)) {
+          errorEl.textContent = "這是嘴圖案，請選擇嘴型來源品種";
+          return;
+        }
+
         try {
           await updateDog(dogId, {
             name: modalEl.querySelector("#e-name").value.trim(),
             series: modalEl.querySelector("#e-series").value.trim() || null,
+            breedId: modalEl.querySelector("#e-breed").value || null,
+            accountId: modalEl.querySelector("#e-account").value || null,
             gender: modalEl.querySelector("#e-gender").value,
+            dogType: newDogType,
             level: Number(modalEl.querySelector("#e-level").value) || 0,
             purityMixDegree: Number(modalEl.querySelector("#e-purity").value) || 0,
+            effects: effectsCheck.correctedEffects,
+            patternId: selectedPatternId,
+            mouthSourceBreedId: isMouthDog ? mouthSourceBreedId : null,
+            sourceType: modalEl.querySelector("#e-source-type").value,
+            sourcePerson: modalEl.querySelector("#e-source-person").value.trim(),
+            sourceAmount: modalEl.querySelector("#e-source-amount").value
+              ? Number(modalEl.querySelector("#e-source-amount").value)
+              : null,
+            birthDate: modalEl.querySelector("#e-birthdate").value || null,
+            memorialTags: tagController.getSelectedTags(),
             fatherId: newFatherId,
             motherId: newMotherId,
             notes: modalEl.querySelector("#e-notes").value.trim()
           });
           close();
-          await loadReferenceData(); // 父母關係可能改變，重新整理狗狗清單快取
+          await loadReferenceData(); // 父母關係／品種等可能改變，重新整理狗狗清單快取
           await loadDog();
         } catch (err) {
-          errorEl.textContent = "儲存失敗，請稍後再試";
+          errorEl.textContent = err.message || "儲存失敗，請稍後再試";
           console.error(err);
         }
       });

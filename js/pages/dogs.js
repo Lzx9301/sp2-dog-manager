@@ -6,6 +6,7 @@ import { renderNav } from "../components/nav.js";
 import { openModal } from "../components/modal.js";
 import { attachAutocomplete, attachTagInput } from "../components/autocomplete.js";
 import { buildParentOptionsHtml, attachAddExternalNodeButton, attachGenderMismatchWarning } from "../components/parentPicker.js";
+import { buildEffectCheckboxesHtml, attachEffectEnforcement } from "../components/effectPicker.js";
 import {
   searchDogs,
   createDog,
@@ -16,11 +17,13 @@ import {
 } from "../services/dogService.js";
 import { getActiveAccounts } from "../services/accountService.js";
 import { getActiveBreeds } from "../services/breedService.js";
-import { getAllEffects, MAX_EFFECTS_PER_DOG } from "../services/effectService.js";
+import { getAllEffects } from "../services/effectService.js";
 import { getAllPatterns } from "../services/patternService.js";
 import { getAllExternalNodes } from "../services/externalPedigreeService.js";
 import { GENDER_LABELS, DOG_TYPE_LABELS, SOURCE_TYPE_LABELS } from "../utils/constants.js";
 import { isMouthPattern, formatMouthDogLabel, isValidMouthSourceBreedId } from "../utils/mouthType.js";
+import { validateDogEffects, getMaxEffectsForDogType } from "../utils/effectValidation.js";
+import { getPurityLevelLabel } from "../utils/breedingPrediction.js";
 
 await requireLogin();
 renderNav("dogs.html");
@@ -141,7 +144,7 @@ function renderDogList(dogs) {
       <div class="dog-meta" style="margin-top:6px;">
         ${mouthLabel ? `外觀：${mouthLabel}<br/>` : `品種：${breedName(dog.breedId)}<br/>`}
         帳號：${accountName(dog.accountId)}<br/>
-        等級：Lv.${dog.level ?? "-"}　純／混度：${dog.purityMixDegree ?? "-"}
+        等級：Lv.${dog.level ?? "-"}　${getPurityLevelLabel(dog.dogType)}：${dog.purityMixDegree ?? "-"}
       </div>
     `;
     card.addEventListener("click", () => {
@@ -159,17 +162,6 @@ function accountOptionsHtml() {
 
 function breedOptionsHtml() {
   return breeds.map((b) => `<option value="${b.id}">${b.name}</option>`).join("");
-}
-
-function effectCheckboxesHtml() {
-  return effects
-    .map(
-      (e) => `
-      <label style="display:inline-flex; align-items:center; gap:4px; margin-right:10px;">
-        <input type="checkbox" class="effect-checkbox" value="${e.id}" />${e.name}
-      </label>`
-    )
-    .join("");
 }
 
 function patternOptionsHtml() {
@@ -219,9 +211,10 @@ function openAddDogModal() {
         </div>
       </div>
 
-      <div class="form-group" id="f-pure-effects-group">
-        <label>特效（純種，最多 ${MAX_EFFECTS_PER_DOG} 個）</label>
-        <div>${effectCheckboxesHtml() || "尚未建立任何特效，請先到系統設定新增"}</div>
+      <div class="form-group" id="f-effects-group">
+        <label id="f-effects-label">特效（純種最多 ${getMaxEffectsForDogType("pure")} 個）</label>
+        <div>${buildEffectCheckboxesHtml(effects, [], "f-effect") || "尚未建立任何特效，請先到系統設定新增"}</div>
+        <div id="f-effects-warning" style="color:var(--color-warning); font-size:12px; margin-top:2px;"></div>
       </div>
 
       <div class="form-group" id="f-mixed-pattern-group" style="display:none;">
@@ -263,7 +256,7 @@ function openAddDogModal() {
 
       <div class="form-row">
         <div class="form-group">
-          <label>純／混度</label>
+          <label id="f-purity-label">${getPurityLevelLabel("pure")}</label>
           <input type="number" id="f-purity" value="1" />
         </div>
         <div class="form-group">
@@ -289,9 +282,15 @@ function openAddDogModal() {
         </div>
       </div>
 
-      <div class="form-group">
-        <label>生日（選填）</label>
-        <input type="date" id="f-birthdate" />
+      <div class="form-row">
+        <div class="form-group">
+          <label>金額（選填）</label>
+          <input type="number" id="f-source-amount" />
+        </div>
+        <div class="form-group">
+          <label>生日（選填）</label>
+          <input type="date" id="f-birthdate" />
+        </div>
       </div>
 
       <div class="form-group">
@@ -323,12 +322,20 @@ function openAddDogModal() {
         memorialTags
       );
 
-      // dogType 切換顯示特效／圖案
+      // dogType 切換：圖案欄位顯示切換、特效上限即時更新、純度標籤動態更新
       const dogTypeSelect = modalEl.querySelector("#f-dogtype");
-      const effectsGroup = modalEl.querySelector("#f-pure-effects-group");
       const patternGroup = modalEl.querySelector("#f-mixed-pattern-group");
       const patternSelect = modalEl.querySelector("#f-pattern");
       const mouthSourceGroup = modalEl.querySelector("#f-mouth-source-group");
+      const effectsLabel = modalEl.querySelector("#f-effects-label");
+      const purityLabel = modalEl.querySelector("#f-purity-label");
+
+      const effectEnforcement = attachEffectEnforcement({
+        containerEl: modalEl,
+        checkboxSelector: ".f-effect",
+        getDogType: () => dogTypeSelect.value,
+        warningEl: modalEl.querySelector("#f-effects-warning")
+      });
 
       function syncMouthSourceVisibility() {
         const isMixed = dogTypeSelect.value === "mixed";
@@ -340,16 +347,17 @@ function openAddDogModal() {
         }
       }
 
-      dogTypeSelect.addEventListener("change", () => {
-        if (dogTypeSelect.value === "pure") {
-          effectsGroup.style.display = "block";
-          patternGroup.style.display = "none";
-        } else {
-          effectsGroup.style.display = "none";
-          patternGroup.style.display = "block";
-        }
+      function syncDogTypeDependentUI() {
+        const dogType = dogTypeSelect.value;
+        patternGroup.style.display = dogType === "mixed" ? "block" : "none";
+        effectsLabel.textContent = `特效（${dogType === "pure" ? "純種" : "混種"}最多 ${getMaxEffectsForDogType(dogType)} 個）`;
+        purityLabel.textContent = getPurityLevelLabel(dogType);
+        // 切換類型時：不直接清空已勾選的特效，保留前面的合法數量，超過的部分才移除
+        effectEnforcement.enforceOnTypeChange();
         syncMouthSourceVisibility();
-      });
+      }
+
+      dogTypeSelect.addEventListener("change", syncDogTypeDependentUI);
       patternSelect.addEventListener("change", syncMouthSourceVisibility);
 
       // 父母欄位：新增外部血統節點按鈕 + 性別不符警告
@@ -367,12 +375,10 @@ function openAddDogModal() {
         errorEl.textContent = "";
 
         const dogType = dogTypeSelect.value;
-        const selectedEffectIds = Array.from(
-          modalEl.querySelectorAll(".effect-checkbox:checked")
-        ).map((cb) => cb.value);
-
-        if (dogType === "pure" && selectedEffectIds.length > MAX_EFFECTS_PER_DOG) {
-          errorEl.textContent = `特效最多只能選 ${MAX_EFFECTS_PER_DOG} 個`;
+        const selectedEffectIds = effectEnforcement.getCheckedIds();
+        const effectsCheck = validateDogEffects(dogType, selectedEffectIds);
+        if (!effectsCheck.valid) {
+          errorEl.textContent = effectsCheck.errorMessage;
           return;
         }
 
@@ -401,13 +407,16 @@ function openAddDogModal() {
           breedId: modalEl.querySelector("#f-breed").value || null,
           gender: modalEl.querySelector("#f-gender").value,
           dogType,
-          effects: dogType === "pure" ? selectedEffectIds : [],
+          effects: effectsCheck.correctedEffects,
           patternId: selectedPatternId,
           mouthSourceBreedId: isMouthDog ? mouthSourceBreedId : null,
           purityMixDegree: Number(modalEl.querySelector("#f-purity").value) || 0,
           level: Number(modalEl.querySelector("#f-level").value) || 1,
           sourceType: modalEl.querySelector("#f-source-type").value,
           sourcePerson: modalEl.querySelector("#f-source-person").value.trim(),
+          sourceAmount: modalEl.querySelector("#f-source-amount").value
+            ? Number(modalEl.querySelector("#f-source-amount").value)
+            : null,
           birthDate: modalEl.querySelector("#f-birthdate").value || null,
           memorialTags: tagInputController.getSelectedTags(),
           notes: modalEl.querySelector("#f-notes").value.trim(),

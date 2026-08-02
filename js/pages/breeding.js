@@ -23,11 +23,13 @@ import {
 } from "../services/dogService.js";
 import { getActiveAccounts } from "../services/accountService.js";
 import { getActiveBreeds } from "../services/breedService.js";
-import { getAllEffects, MAX_EFFECTS_PER_DOG } from "../services/effectService.js";
+import { getAllEffects } from "../services/effectService.js";
 import { getAllPatterns } from "../services/patternService.js";
 import { checkPedigreeCompatibility, getPedigreePermission, PEDIGREE_LEVEL } from "../utils/pedigreeService.js";
-import { predictOffspring, formatTypeLevel } from "../utils/breedingPrediction.js";
+import { predictOffspring, formatTypeLevel, getPurityLevelLabel } from "../utils/breedingPrediction.js";
 import { resolveParentRoles } from "../utils/parentRoleResolver.js";
+import { validateDogEffects, getMaxEffectsForDogType } from "../utils/effectValidation.js";
+import { buildEffectCheckboxesHtml, attachEffectEnforcement } from "../components/effectPicker.js";
 import { resolveEffectiveOffspringIds, canShowAddOffspring } from "../utils/offspringPlan.js";
 
 await requireLogin();
@@ -358,9 +360,6 @@ async function renderPlanCard(plan, listEl) {
 function openAddOffspringModal(plan, father, mother) {
   const accountOptions = accounts.map((a) => `<option value="${a.id}">${a.accountName}</option>`).join("");
   const breedOptions = breeds.map((b) => `<option value="${b.id}">${b.name}</option>`).join("");
-  const effectCheckboxes = effects
-    .map((e) => `<label style="margin-right:10px;"><input type="checkbox" class="o-effect" value="${e.id}" />${e.name}</label>`)
-    .join("");
   const patternOptions = patterns.map((p) => `<option value="${p.id}">${p.canonicalName}</option>`).join("");
   const today = new Date().toISOString().slice(0, 10);
 
@@ -401,7 +400,11 @@ function openAddOffspringModal(plan, father, mother) {
           </select>
         </div>
       </div>
-      <div class="form-group" id="o-effects-group"><label>特效（最多 ${MAX_EFFECTS_PER_DOG}）</label>${effectCheckboxes}</div>
+      <div class="form-group" id="o-effects-group">
+        <label id="o-effects-label">特效（${prediction.valid ? `${prediction.offspringType === "pure" ? "純種" : "混種"}最多 ${getMaxEffectsForDogType(prediction.offspringType)} 個` : "純種最多 3 個／混種最多 1 個"}）</label>
+        ${buildEffectCheckboxesHtml(effects, [], "o-effect")}
+        <div id="o-effects-warning" style="color:var(--color-warning); font-size:12px; margin-top:2px;"></div>
+      </div>
       <div class="form-group" id="o-pattern-group" style="display:none;"><label>圖案</label><select id="o-pattern"><option value="">（未設定）</option>${patternOptions}</select></div>
       <div class="form-group"><label>生日</label><input type="date" id="o-birthdate" value="${today}" /></div>
       <div class="form-group">
@@ -425,15 +428,25 @@ function openAddOffspringModal(plan, father, mother) {
       );
 
       const dogTypeSelect = modalEl.querySelector("#o-dogtype");
-      const effectsGroup = modalEl.querySelector("#o-effects-group");
       const patternGroup = modalEl.querySelector("#o-pattern-group");
-      function syncEffectsPatternVisibility() {
-        const isPure = dogTypeSelect.value === "pure";
-        effectsGroup.style.display = isPure ? "block" : "none";
-        patternGroup.style.display = isPure ? "none" : "block";
+      const effectsLabel = modalEl.querySelector("#o-effects-label");
+
+      const effectEnforcement = attachEffectEnforcement({
+        containerEl: modalEl,
+        checkboxSelector: ".o-effect",
+        getDogType: () => dogTypeSelect.value,
+        warningEl: modalEl.querySelector("#o-effects-warning")
+      });
+
+      function syncDogTypeDependentUI() {
+        const dogType = dogTypeSelect.value;
+        patternGroup.style.display = dogType === "mixed" ? "block" : "none";
+        effectsLabel.textContent = `特效（${dogType === "pure" ? "純種" : "混種"}最多 ${getMaxEffectsForDogType(dogType)} 個）`;
+        // 切換類型時：不直接清空已勾選的特效，保留前面的合法數量，超過的部分才移除
+        effectEnforcement.enforceOnTypeChange();
       }
-      dogTypeSelect.addEventListener("change", syncEffectsPatternVisibility);
-      syncEffectsPatternVisibility(); // 依預測結果預選的類型，一開始就要同步顯示對應區塊
+      dogTypeSelect.addEventListener("change", syncDogTypeDependentUI);
+      syncDogTypeDependentUI(); // 依預測結果預選的類型，一開始就要同步顯示對應區塊
 
       modalEl.querySelector('[data-action="cancel"]').addEventListener("click", close);
       modalEl.querySelector('[data-action="save"]').addEventListener("click", async () => {
@@ -451,9 +464,10 @@ function openAddOffspringModal(plan, father, mother) {
         }
 
         const dogType = dogTypeSelect.value;
-        const selectedEffectIds = Array.from(modalEl.querySelectorAll(".o-effect:checked")).map((cb) => cb.value);
-        if (dogType === "pure" && selectedEffectIds.length > MAX_EFFECTS_PER_DOG) {
-          errorEl.textContent = `特效最多只能選 ${MAX_EFFECTS_PER_DOG} 個`;
+        const selectedEffectIds = effectEnforcement.getCheckedIds();
+        const effectsCheck = validateDogEffects(dogType, selectedEffectIds);
+        if (!effectsCheck.valid) {
+          errorEl.textContent = effectsCheck.errorMessage;
           return;
         }
 
@@ -465,7 +479,7 @@ function openAddOffspringModal(plan, father, mother) {
             breedId: modalEl.querySelector("#o-breed").value || null,
             gender: modalEl.querySelector("#o-gender").value,
             dogType,
-            effects: dogType === "pure" ? selectedEffectIds : [],
+            effects: effectsCheck.correctedEffects,
             patternId: dogType === "mixed" ? modalEl.querySelector("#o-pattern").value || null : null,
             purityMixDegree: prediction.offspringLevel,
             level: 1,
