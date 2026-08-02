@@ -18,6 +18,7 @@ import {
   where
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { generateDogId } from "../utils/idGenerator.js";
+import { validateDogEffects } from "../utils/effectValidation.js";
 
 const COLLECTION_NAME = "dogs";
 
@@ -71,14 +72,24 @@ export async function getChildrenByParents(fatherId, motherId) {
 /**
  * 新增狗狗
  * @param {object} dogData - 不含 id / createdAt / updatedAt，這裡自動處理
+ * @throws {Error} 特效數量不符規則時（純種超過 3 個／混種超過 1 個）拋出中文錯誤，
+ *   不信任前端傳入的 effects，這裡是第二層防呆
  */
 export async function createDog(dogData) {
+  const normalized = normalizeDogData(dogData);
+
+  const effectsCheck = validateDogEffects(normalized.dogType, normalized.effects);
+  if (!effectsCheck.valid) {
+    throw new Error(effectsCheck.errorMessage);
+  }
+  normalized.effects = effectsCheck.correctedEffects;
+
   const dogId = await generateDogId();
   const now = new Date().toISOString();
 
   const docRef = doc(db, COLLECTION_NAME, dogId);
   const fullData = {
-    ...normalizeDogData(dogData),
+    ...normalized,
     createdAt: now,
     updatedAt: now
   };
@@ -87,11 +98,26 @@ export async function createDog(dogData) {
   return { id: dogId, ...fullData };
 }
 
-/** 更新狗狗資料（局部更新） */
+/**
+ * 更新狗狗資料（局部更新）
+ * @throws {Error} 若這次更新同時包含 dogType 與 effects，且不符合特效數量規則，
+ *   拋出中文錯誤（只有兩者都出現在這次更新時才驗證，避免單獨更新其他欄位
+ *   時因為沒有 dogType 上下文而誤判）
+ */
 export async function updateDog(id, partialData) {
+  const normalized = normalizeDogData(partialData, { partial: true });
+
+  if (normalized.dogType !== undefined && normalized.effects !== undefined) {
+    const effectsCheck = validateDogEffects(normalized.dogType, normalized.effects);
+    if (!effectsCheck.valid) {
+      throw new Error(effectsCheck.errorMessage);
+    }
+    normalized.effects = effectsCheck.correctedEffects;
+  }
+
   const docRef = doc(db, COLLECTION_NAME, id);
   await updateDoc(docRef, {
-    ...normalizeDogData(partialData, { partial: true }),
+    ...normalized,
     updatedAt: new Date().toISOString()
   });
 }
@@ -115,6 +141,8 @@ function normalizeDogData(data, { partial = false } = {}) {
     result.fatherId = result.fatherId || null;
     result.motherId = result.motherId || null;
     result.birthDate = result.birthDate || null;
+    // 來源金額：完整編輯表單新增的欄位，選填，沒填就是 null（不是 0，避免跟「免費取得」混淆）
+    result.sourceAmount = result.sourceAmount ?? null;
     // 嘴型來源品種：只有「嘴」圖案的混種狗才需要，其餘一律 null（不是缺欄位，是明確不適用）
     result.mouthSourceBreedId = result.mouthSourceBreedId || null;
   }

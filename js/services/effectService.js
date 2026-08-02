@@ -1,8 +1,11 @@
 // ==================================================
 // 特效 Service (effects collection)
 // ==================================================
-// 純種狗 (dogType === "pure") 可以選最多 3 個特效。
-// 特效清單不寫死，透過這個 service 管理。
+// 特效清單（有哪些特效可選）不寫死，透過這個 service 管理。
+//
+// 特效「數量規則」（純種最多幾個、混種最多幾個）統一定義在
+// js/utils/effectValidation.js，這裡只 re-export 方便既有程式碼引用，
+// 不要在這裡重複定義規則。
 
 import { db } from "../firebase-config.js";
 import {
@@ -14,11 +17,20 @@ import {
   updateDoc,
   deleteDoc
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { EFFECT_LIMIT_BY_DOG_TYPE, getMaxEffectsForDogType, validateDogEffects } from "../utils/effectValidation.js";
 
 const COLLECTION_NAME = "effects";
 
-/** 純種狗最多可選特效數量（獨立常數，不寫死在 UI） */
-export const MAX_EFFECTS_PER_DOG = 3;
+// 特效數量規則的唯一事實來源在 effectValidation.js，這裡只轉出給既有呼叫端使用
+export { EFFECT_LIMIT_BY_DOG_TYPE, getMaxEffectsForDogType, validateDogEffects };
+
+/**
+ * @deprecated 特效數量規則現在依 dogType 而不同（純種 3 個、混種 1 個），
+ *   不再是單一常數。請改用 getMaxEffectsForDogType(dogType) 或
+ *   validateDogEffects(dogType, effects)。這裡保留純種的上限值，
+ *   避免尚未更新的舊程式碼直接報錯。
+ */
+export const MAX_EFFECTS_PER_DOG = EFFECT_LIMIT_BY_DOG_TYPE.pure;
 
 export async function getEffectById(id) {
   if (!id) return null;
@@ -52,7 +64,10 @@ export async function deleteEffect(id) {
   await deleteDoc(doc(db, COLLECTION_NAME, id));
 }
 
-/** 驗證選擇的特效數量是否合法（給表單驗證使用） */
+/**
+ * @deprecated 沒有考慮 dogType，會誤用純種的上限判斷混種。
+ *   請改用 validateDogEffects(dogType, effectIds).valid。
+ */
 export function isValidEffectSelection(effectIds) {
   return Array.isArray(effectIds) && effectIds.length <= MAX_EFFECTS_PER_DOG;
 }
