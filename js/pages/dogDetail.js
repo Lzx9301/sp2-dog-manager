@@ -110,13 +110,14 @@ async function renderBasicSection() {
 async function renderAppearanceSection() {
   const el = document.getElementById("section-appearance");
 
+  const effectNames = await Promise.all((dog.effects || []).map((id) => getEffectById(id)));
+  const effectsHtml =
+    effectNames.filter(Boolean).map((e) => `<span class="tag">${e.name}</span>`).join("") || "（無）";
+
   if (dog.dogType === "pure") {
-    const effectNames = await Promise.all((dog.effects || []).map((id) => getEffectById(id)));
     el.innerHTML = `
       <div><strong>類型：</strong>${DOG_TYPE_LABELS.pure}</div>
-      <div><strong>特效：</strong>${
-        effectNames.filter(Boolean).map((e) => `<span class="tag">${e.name}</span>`).join("") || "（無）"
-      }</div>
+      <div><strong>特效：</strong>${effectsHtml}</div>
     `;
   } else if (dog.dogType === "mixed") {
     const pattern = dog.patternId ? await getPatternById(dog.patternId) : null;
@@ -130,6 +131,7 @@ async function renderAppearanceSection() {
         <div><strong>類型：</strong>${DOG_TYPE_LABELS.mixed}</div>
         <div><strong>圖案：</strong>${pattern.canonicalName}</div>
         <div><strong>外觀：</strong>${mouthLabel || "（缺少自身品種，無法顯示）"}</div>
+        <div><strong>特效：</strong>${effectsHtml}</div>
         <button class="btn btn-secondary btn-small" id="edit-mouth-source-btn" style="margin-top:6px;">
           ${dog.mouthSourceBreedId ? "編輯嘴型" : "設定嘴型"}
         </button>
@@ -139,6 +141,7 @@ async function renderAppearanceSection() {
       el.innerHTML = `
         <div><strong>類型：</strong>${DOG_TYPE_LABELS.mixed}</div>
         <div><strong>圖案：</strong>${pattern ? pattern.canonicalName : "（未設定）"}</div>
+        <div><strong>特效：</strong>${effectsHtml}</div>
       `;
     }
   } else {

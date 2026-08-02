@@ -31,6 +31,7 @@ import { resolveParentRoles } from "../utils/parentRoleResolver.js";
 import { validateDogEffects, getMaxEffectsForDogType } from "../utils/effectValidation.js";
 import { buildEffectCheckboxesHtml, attachEffectEnforcement } from "../components/effectPicker.js";
 import { resolveEffectiveOffspringIds, canShowAddOffspring } from "../utils/offspringPlan.js";
+import { isMouthPattern, isValidMouthSourceBreedId } from "../utils/mouthType.js";
 
 await requireLogin();
 renderNav("breeding.html");
@@ -54,6 +55,11 @@ async function loadReferenceData() {
     getDistinctMemorialTags(),
     getAllDogs()
   ]);
+}
+
+/** 從已載入的 patterns 陣列同步查找（不打 Firestore），供表單即時互動使用 */
+function patternById(patternId) {
+  return patterns.find((p) => p.id === patternId) || null;
 }
 
 async function loadPlans() {
@@ -405,7 +411,14 @@ function openAddOffspringModal(plan, father, mother) {
         ${buildEffectCheckboxesHtml(effects, [], "o-effect")}
         <div id="o-effects-warning" style="color:var(--color-warning); font-size:12px; margin-top:2px;"></div>
       </div>
-      <div class="form-group" id="o-pattern-group" style="display:none;"><label>圖案</label><select id="o-pattern"><option value="">（未設定）</option>${patternOptions}</select></div>
+      <div class="form-group" id="o-pattern-group" style="display:none;">
+        <label>圖案</label>
+        <select id="o-pattern"><option value="">（未設定）</option>${patternOptions}</select>
+      </div>
+      <div class="form-group" id="o-mouth-source-group" style="display:none;">
+        <label>嘴型來源／這是什麼嘴</label>
+        <select id="o-mouth-source"><option value="">（請選擇）</option>${breedOptions}</select>
+      </div>
       <div class="form-group"><label>生日</label><input type="date" id="o-birthdate" value="${today}" /></div>
       <div class="form-group">
         <label>紀念標籤</label>
@@ -429,6 +442,8 @@ function openAddOffspringModal(plan, father, mother) {
 
       const dogTypeSelect = modalEl.querySelector("#o-dogtype");
       const patternGroup = modalEl.querySelector("#o-pattern-group");
+      const patternSelect = modalEl.querySelector("#o-pattern");
+      const mouthSourceGroup = modalEl.querySelector("#o-mouth-source-group");
       const effectsLabel = modalEl.querySelector("#o-effects-label");
 
       const effectEnforcement = attachEffectEnforcement({
@@ -438,14 +453,26 @@ function openAddOffspringModal(plan, father, mother) {
         warningEl: modalEl.querySelector("#o-effects-warning")
       });
 
+      function syncMouthSourceVisibility() {
+        const isMixed = dogTypeSelect.value === "mixed";
+        const selectedPattern = patternById(patternSelect.value);
+        const showMouthField = isMixed && isMouthPattern(selectedPattern);
+        mouthSourceGroup.style.display = showMouthField ? "block" : "none";
+        if (!showMouthField) {
+          modalEl.querySelector("#o-mouth-source").value = "";
+        }
+      }
+
       function syncDogTypeDependentUI() {
         const dogType = dogTypeSelect.value;
         patternGroup.style.display = dogType === "mixed" ? "block" : "none";
         effectsLabel.textContent = `特效（${dogType === "pure" ? "純種" : "混種"}最多 ${getMaxEffectsForDogType(dogType)} 個）`;
         // 切換類型時：不直接清空已勾選的特效，保留前面的合法數量，超過的部分才移除
         effectEnforcement.enforceOnTypeChange();
+        syncMouthSourceVisibility();
       }
       dogTypeSelect.addEventListener("change", syncDogTypeDependentUI);
+      patternSelect.addEventListener("change", syncMouthSourceVisibility);
       syncDogTypeDependentUI(); // 依預測結果預選的類型，一開始就要同步顯示對應區塊
 
       modalEl.querySelector('[data-action="cancel"]').addEventListener("click", close);
@@ -471,6 +498,18 @@ function openAddOffspringModal(plan, father, mother) {
           return;
         }
 
+        // 嘴型驗證：圖案是嘴的話，一定要選嘴型來源品種，且必須是允許清單裡的品種
+        const selectedPatternId = dogType === "mixed" ? patternSelect.value || null : null;
+        const selectedPattern = patternById(selectedPatternId);
+        const isMouthDog = dogType === "mixed" && isMouthPattern(selectedPattern);
+        const mouthSourceBreedId = modalEl.querySelector("#o-mouth-source").value || null;
+        const validBreedIds = breeds.map((b) => b.id);
+
+        if (isMouthDog && !isValidMouthSourceBreedId(mouthSourceBreedId, validBreedIds)) {
+          errorEl.textContent = "這是嘴圖案，請選擇嘴型來源品種";
+          return;
+        }
+
         try {
           const newDog = await createDog({
             name,
@@ -480,7 +519,8 @@ function openAddOffspringModal(plan, father, mother) {
             gender: modalEl.querySelector("#o-gender").value,
             dogType,
             effects: effectsCheck.correctedEffects,
-            patternId: dogType === "mixed" ? modalEl.querySelector("#o-pattern").value || null : null,
+            patternId: selectedPatternId,
+            mouthSourceBreedId: isMouthDog ? mouthSourceBreedId : null,
             purityMixDegree: prediction.offspringLevel,
             level: 1,
             sourceType: "self_bred",
