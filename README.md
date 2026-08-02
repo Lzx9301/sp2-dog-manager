@@ -94,13 +94,14 @@ service cloud.firestore {
 | breedId | string\|null | 品種 id |
 | gender | "male"\|"female" | 性別，可隨時修改，不記錄歷史 |
 | dogType | "pure"\|"mixed" | 純種／混種 |
-| effects | string[] | 純種特效 id，最多 3 個 |
+| effects | string[] | 特效 id 清單。**數量規則依 dogType 而不同**：純種最多 3 個、混種最多 1 個（見「9. 特效規則」） |
 | patternId | string\|null | 混種圖案 id |
 | mouthSourceBreedId | string\|null | 嘴型來源品種 id（只有圖案是「嘴」的混種狗才會用到，其餘一律 null；值是 breeds 的 id，不是顯示名稱） |
-| purityMixDegree | number | 純／混度 |
+| purityMixDegree | number | 純種時代表純度、混種時代表混度，共用同一欄位（畫面顯示會依 dogType 標示「純度」或「混度」，不會顯示含糊的「純／混度」） |
 | level | number | 等級 |
 | sourceType | "purchase"\|"exchange"\|"gift"\|"self_bred"\|"other" | 取得方式 |
 | sourcePerson | string | 來源對象 |
+| sourceAmount | number\|null | 取得金額，選填（完整編輯表單新增的欄位） |
 | birthDate | string\|null | 生日，選填 |
 | memorialTags | string[] | 紀念標籤 |
 | fatherId | string\|null | 父親（可能是 dogs 或 externalPedigreeNodes 的 id）|
@@ -420,6 +421,45 @@ dogId, fromAccountId, toAccountId, movedAt, notes
 **收藏中心相容性**：`breedId` 跟 `mouthSourceBreedId` 是兩個獨立欄位，之後收藏中心可以直接照文件說的邏輯讀取——`breedId` 決定品種區塊，`mouthSourceBreedId` 決定 20 個嘴格中的哪一格；`mouthSourceBreedId` 是 `null` 或缺欄位時就是「未知」，不會被這次的程式碼自動勾選或歸類到任何一格。
 
 **測試**：`tests/mouthType.test.js`，15 筆案例，涵蓋旗標判斷（含舊資料沒有這個欄位、`null`、用名稱猜測會被刻意排除）、顯示文字組合（含缺自身品種時回傳 `null` 不硬編文字）、驗證清單比對（含空值、清單不是陣列時的防呆）。
+
+---
+
+## 6.4 特效規則（`js/utils/effectValidation.js`）
+
+**問題背景**：不同頁面（新增狗狗、新增子代）原本各自寫了一套特效規則，而且規則本身是錯的——把「混種一律清空特效」當成規則，實際規則應該是「純種最多 3 個、混種最多 1 個」（混種不是不能有特效，只是最多 1 個）。
+
+`validateDogEffects(dogType, effects)` 是全站唯一定義這個規則的地方，純函式，回傳：
+```js
+{
+  valid: boolean,              // 原本的選擇是否已經符合規則
+  correctedEffects: string[],  // 去重、不超過上限的修正後清單
+  errorMessage: string|null    // 不合法時的中文說明
+}
+```
+規則常數在 `EFFECT_LIMIT_BY_DOG_TYPE = { pure: 3, mixed: 1 }`，要調整數量只需要改這裡。
+
+**共用到哪些地方**：
+- `dogService.js`：`createDog`／`updateDog` 內部呼叫，作為第二層防呆（不信任前端傳來的 `effects`），不合法直接 `throw` 中文錯誤
+- `effectService.js`：re-export 給既有程式碼引用，不重複定義規則；舊的 `MAX_EFFECTS_PER_DOG`、`isValidEffectSelection` 標記 `@deprecated` 但保留相容
+- `dogs.js`（新增狗狗）、`breeding.js`（新增子代）、`dogDetail.js`（編輯狗狗）：三個表單的特效 checkbox 都改用共用元件 `js/components/effectPicker.js` 的 `buildEffectCheckboxesHtml()` 產生 HTML、`attachEffectEnforcement()` 掛上即時限制行為，不再各自寫 checkbox 邏輯
+
+**切換純種／混種時的行為**（`attachEffectEnforcement` 的 `enforceOnTypeChange()`）：不會直接清空已勾選的特效，而是保留前面的合法數量，超過的部分才移除，並在旁邊顯示提示文字。例如純種選了 A、B、C 三個特效，切成混種後會自動保留 A、移除 B、C，並提示「混種最多只能選 1 個特效」。使用者手動勾選導致超過上限時（例如混種已經勾了 1 個又想勾第 2 個），會直接復原剛剛那個勾選動作，不會讓畫面出現「已經超過上限」的中間狀態。
+
+**測試**：`tests/effectValidation.test.js`，19 筆案例，涵蓋純種 0~4 個特效、混種 0~2 個特效、型別切換保留前面合法數量、重複 id 去重、`effects` 為 `undefined` 不崩潰等情況。
+
+---
+
+## 6.5 完整狗狗編輯（`dogDetail.js` 的編輯 Modal）
+
+原本的編輯表單只能改名稱、系列、性別、等級、純／混度、父母、備註，這次補齊成可以編輯狗狗的完整外觀與來源資訊：
+
+**基本資料**：名稱、系列、品種（`breedId`）、性別、純種／混種（`dogType`，切換時會同步更新特效上限與圖案／嘴型來源欄位的顯示）、純度／混度（標籤依 `dogType` 動態顯示「純度」或「混度」）、圖案（`patternId`，只有混種才顯示）、嘴型來源（只有選到「嘴」圖案才顯示，且必填並驗證是否在 `breeds` 清單內）、特效（依 `dogType` 套用共用規則）、所屬帳號（`accountId`）、備註。
+
+**來源資訊**：來源類型（`sourceType`）、來源對象（`sourcePerson`）、金額（`sourceAmount`，新欄位，選填）、出生日（`birthDate`）、紀念日（`memorialTags`，多個標籤用 Enter 新增）。
+
+**保留不動**：父親／母親選擇（含循環防呆）、伴侶、子代區塊，這次沒有修改這幾塊的邏輯。
+
+儲存時會依序做：父母循環防呆檢查 → 特效規則驗證（`validateDogEffects`）→ 嘴型來源驗證（只有選到嘴圖案時才要求）→ 呼叫 `updateDog()`（`dogService.js` 內部還會再做一次特效規則的第二層防呆）。
 
 ---
 
